@@ -21,7 +21,7 @@ export default async function Home() {
 
   const { data: business } = await supabase
     .from("businesses")
-    .select("id, name, daily_float")
+    .select("id, name, daily_float, low_cash_threshold, low_cash_alerted")
     .eq("id", profile.business_id)
     .single();
 

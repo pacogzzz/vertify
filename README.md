@@ -1,8 +1,11 @@
-# Cuadra
+# Vertify
 
-Control de gastos del mandadero para restaurantes: el dueño entrega un fondo, el mandadero compra y registra cada gasto con foto del ticket (OCR) o a mano, y el saldo baja solo. **Saldo = Σ(recargas) − Σ(gastos)**; lo que sobra se arrastra al día siguiente.
+Control de gastos del **encargado de compra** para restaurantes: el dueño entrega un fondo en efectivo (con foto de la entrega), el encargado compra y registra cada compra con la foto obligatoria del ticket, y el control se lleva en **dos divisiones dentro de la misma sección**:
 
-Port de producción del prototipo `cuadra.jsx` (la implementación de referencia — UI, copys y lógica de dinero intactos).
+- **EFECTIVO** — empieza en el efectivo entregado por el dueño y **va restando** con cada compra en efectivo.
+- **TARJETA** — empieza en **cero** y **va sumando** lo gastado con la tarjeta del negocio.
+
+Port de producción del prototipo `cuadra.jsx` (la implementación de referencia).
 
 **Stack:** Next.js (App Router) + TypeScript · Supabase (Auth, Postgres, Storage) · Google Gemini para OCR (free tier, fallback Anthropic) · PWA instalable · deploy en Vercel.
 
@@ -22,53 +25,80 @@ Variables de `.env.local`:
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | cliente + server | URL del proyecto Supabase |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | cliente + server | Publishable key (o legacy anon) |
-| `SUPABASE_SERVICE_ROLE_KEY` | **solo server** | Crea cuentas y firma URLs de tickets |
+| `NEXT_PUBLIC_SITE_URL` | server | Base de los links de confirmación de correo |
+| `SUPABASE_SERVICE_ROLE_KEY` | **solo server** | Crea cuentas y firma URLs de fotos |
 | `GEMINI_API_KEY` | **solo server** | OCR de tickets (Google AI Studio, free tier) |
 | `ANTHROPIC_API_KEY` | **solo server** | Opcional: fallback de OCR de pago |
+| `RESEND_API_KEY` | **solo server** | Opcional: correo de aviso de efectivo bajo |
+| `EMAIL_FROM` | **solo server** | Remitente verificado en Resend |
 
-## 2. Base de datos (una sola vez)
+## 2. Base de datos
 
-Abre el **SQL Editor** de tu proyecto en [supabase.com](https://supabase.com) y corre completo:
+Abre el **SQL Editor** de tu proyecto en [supabase.com](https://supabase.com) y corre, en orden:
 
 ```
-supabase/migrations/0001_init.sql
+supabase/migrations/0001_init.sql     # esquema base, RLS y bucket receipts
+supabase/migrations/0002_vertify.sql  # efectivo/tarjeta, fotos de entrega, alerta $700
 ```
 
-Eso crea las tablas (`businesses`, `profiles`, `fundings`, `expenses`), **activa RLS** en todas (aislamiento por `business_id`: el mandadero solo ve sus gastos, el dueño ve todo su negocio) y crea el bucket **privado** `receipts` con sus políticas. Las fotos se ven solo vía signed URLs generadas en el server.
+`0002` agrega `payment_method` a las compras, `photo_path` a las entregas de efectivo, el umbral de alerta al negocio, y el bucket privado `cash-photos`. También deja las fotos de tickets **visibles solo para el dueño** (antes el encargado podía verlas).
 
-## 3. Crear el negocio y la cuenta del dueño
+## 3. Verificación por correo al crear cuenta
 
-1. Abre la app → **"Crea tu negocio"** (`/registro`).
-2. Llena nombre del negocio, tu nombre, correo y contraseña (mínimo 8 caracteres).
-3. Entras directo como **dueño**: verás el saldo, las vistas Hoy/Semana/Mes y el botón de recarga.
+El alta del dueño usa `signUp`, así que Supabase manda un correo de confirmación y la cuenta **no puede entrar hasta confirmarlo**.
 
-## 4. Dar de alta al mandadero
+> **Importante:** el servicio de correo integrado de Supabase solo permite **~2 correos por hora**. Para producción hay que configurar **SMTP propio** en *Authentication → Emails → SMTP Settings* (Resend funciona bien y es gratis hasta 100 correos/día). Sin eso, los registros fallarán con "límite de correos" en cuanto haya un poco de uso.
 
-1. Como dueño, toca el engrane (**Ajustes**) → **"Crear cuenta del mandadero"**.
-2. Pon su nombre, un correo y una contraseña, y pásale esas claves **en persona**.
-3. El mandadero entra una vez en `/login` desde su teléfono y su sesión queda guardada. Él solo ve su saldo y sus propios gastos.
+## 4. Fotos (tickets y entregas de efectivo)
 
-## 5. Instalar como app en el teléfono
+Todo vive en **Supabase Storage**, en dos buckets **privados**:
 
-Abre la URL en Chrome del teléfono → menú → **"Agregar a pantalla de inicio"**. Se instala como app (pantalla completa, ícono propio, orientación vertical).
+- `receipts/{business_id}/{expense_id}.jpg` — tickets de compra.
+- `cash-photos/{business_id}/{YYYY-MM}/{YYYY-MM-DD}_{id}.jpg` — entregas de efectivo, en carpeta por mes y con la fecha en el nombre.
 
-> **Nota honesta sobre notificaciones push:** NO hay push en v1. Las alertas al dueño viven dentro de la app (el feed de movimientos). El upgrade a web-push (VAPID) queda anotado como mejora posterior.
+Solo el dueño puede verlas (RLS + signed URLs de 1 hora generadas en el server). El botón **Ver fotos** abre la galería del rango de fechas elegido, y el Excel incluye una columna **Link de ticket** que apunta a `/ticket/{id}` (pide sesión de dueño y redirige a la foto).
 
-## 6. OCR de tickets
+## 5. Cómo se usa
+
+**Dueño:** crea el negocio en `/registro`, confirma su correo, y desde Ajustes crea la cuenta del **encargado de compra**. Para recargar saldo **es obligatorio tomar la foto entregando el efectivo**. En su panel elige un día o un **rango de fechas** en el calendario, y ve cuatro cuadros (Gastado, Movimientos, IVA, IEPS), el desglose **por tienda**, los movimientos, y los botones **Ver fotos** y **Exportar a Excel**.
+
+**Encargado de compra:** un solo botón verde **REGISTRAR COMPRA** → elige *Efectivo* o *Tarjeta* → escoge la **tienda** de la lista y escribe la **cantidad** → sube la foto del ticket. El sistema revisa que el ticket se vea bien y, cuando lo aprueba, se habilita **Registrar**. La **fecha la pone la app sola** (se muestra arriba); no hay campo de fecha, categoría, concepto ni desglose de impuestos: el subtotal, IVA e IEPS salen del propio ticket.
+
+La lista de tiendas vive en `lib/stores.ts`.
+
+## 6. Aviso de efectivo bajo
+
+Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la app muestra un aviso a **ambos** roles y, si hay `RESEND_API_KEY`, manda un correo a los dos. El aviso se manda **una sola vez** y se reinicia solo cuando se recarga por encima del umbral.
+
+## 7. OCR de tickets
 
 - Endpoint server-side `POST /api/read-receipt`; la key **nunca** toca el cliente.
 - Proveedor por defecto: **Gemini** (`@google/genai`, modelo `gemini-2.5-flash`, salida JSON forzada). Las keys nuevas `AQ.` de AI Studio funcionan nativas con este SDK; **no** usar la ruta OpenAI-compatible.
-- Diseño intercambiable (`lib/ocr.ts`): si Gemini falla por error técnico y hay `ANTHROPIC_API_KEY`, cae a **Claude Haiku** automáticamente. Con `OCR_PROVIDER=anthropic` inviertes el orden.
-- El resultado siempre se muestra **editable** antes de guardar; si el ticket es ilegible, la app cae a captura manual.
+- Diseño intercambiable (`lib/ocr.ts`): si Gemini falla por error técnico y hay `ANTHROPIC_API_KEY`, cae a **Claude Haiku** automáticamente.
+- Además de extraer los montos, el OCR es el **filtro de calidad**: si el ticket sale ilegible, no se puede guardar la compra.
 
-## 7. Deploy en Vercel
+## 8. Pruebas
 
-1. Sube el repo a GitHub y en [vercel.com](https://vercel.com) → **Add New Project** → importa el repo (framework: Next.js, sin config extra).
-2. En **Settings → Environment Variables** agrega las cinco variables de `.env.local` (las secretas solo como server-side, jamás con prefijo `NEXT_PUBLIC_`).
-3. Deploy. Abre la URL de producción en el teléfono e instálala (paso 5).
+```bash
+npm run dev                                          # en otra terminal
+node --env-file=.env.local scripts/e2e-check.mjs     # E2E contra Supabase real
+```
 
-## 8. Decisiones marcadas (prototipo vs producción)
+Crea usuarios `@cuadra-test.dev`, verifica flujos, RLS, storage, las dos divisiones de dinero y la alerta de $700, y **borra todo** al terminar.
 
-- **"Reiniciar datos" se quitó**: en el prototipo borraba el storage local para demos; en producción borraría gastos reales del negocio. Si lo quieres de vuelta (solo dueño, con doble confirmación), es un cambio pequeño.
-- **Saldo del mandadero**: como en el prototipo, el saldo es del negocio completo (v1 = un mandadero). Con varios mandaderos habría que llevar saldo por persona.
-- **Multi-negocio**: el modelo de datos ya lo soporta (todo cuelga de `business_id` con RLS); la UI de v1 asume un negocio por usuario.
+Para revisar la interfaz a ojo con datos de muestra:
+
+```bash
+node --env-file=.env.local scripts/seed-demo.mjs           # siembra
+node --env-file=.env.local scripts/seed-demo.mjs --clean   # borra
+```
+
+## 9. Deploy en Vercel
+
+Push a `main` despliega solo (repo conectado). Las variables nuevas (`NEXT_PUBLIC_SITE_URL`, y si las usas `RESEND_API_KEY` / `EMAIL_FROM`) hay que agregarlas en **Settings → Environment Variables**.
+
+## 10. Decisiones marcadas
+
+- **Notificaciones push:** siguen fuera (requieren convenio con Apple). El aviso de efectivo bajo va por **pantalla + correo**.
+- **Saldo por persona:** el saldo es del negocio completo (v1 = un encargado). Con varios habría que llevarlo por persona.
+- **Multi-negocio:** el modelo ya lo soporta (todo cuelga de `business_id` con RLS); la UI asume un negocio por usuario.

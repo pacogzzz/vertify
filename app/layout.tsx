@@ -3,8 +3,8 @@ import "./globals.css";
 import RegisterSW from "@/components/RegisterSW";
 
 export const metadata: Metadata = {
-  title: "Cuadra",
-  description: "Control de gastos del mandadero: fondo, tickets y saldo al día.",
+  title: "Vertify",
+  description: "Control de gastos del encargado de compra: fondo, tickets y saldo al día.",
   manifest: "/manifest.json",
   icons: {
     icon: "/icons/icon-192.png",
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Cuadra",
+    title: "Vertify",
   },
 };
 

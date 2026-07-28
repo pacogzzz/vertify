@@ -1,6 +1,6 @@
-/* E2E de Cuadra contra Supabase real + dev server local.
+/* E2E de Vertify contra Supabase real + dev server local.
    Crea cuentas/datos de PRUEBA, verifica flujos y RLS, y LIMPIA todo al final.
-   Correr: node --env-file=.env.local test-e2e.tmp.mjs  (con `npm run dev` activo) */
+   Correr: node --env-file=.env.local scripts/e2e-check.mjs  (con `npm run dev` activo) */
 import { createClient } from "@supabase/supabase-js";
 
 const URL_ = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -30,19 +30,58 @@ function authCookie(session) {
 
 const admin = createClient(URL_, SERVICE, { auth: { persistSession: false } });
 
+/** Con "Confirm email" activado, signUp deja al usuario sin confirmar.
+    En pruebas lo confirmamos por admin para poder seguir con el flujo. */
+async function confirmUser(email) {
+  const { data: users } = await admin.auth.admin.listUsers({ perPage: 1000 });
+  const u = (users?.users || []).find((x) => x.email === email);
+  if (!u) return false;
+  if (u.email_confirmed_at) return true;
+  const { error } = await admin.auth.admin.updateUserById(u.id, { email_confirm: true });
+  return !error;
+}
+
+/** Da de alta un dueño. Usa la ruta real; si Supabase corta por límite de
+    correos (servicio integrado: ~2/hora), provisiona por admin para que la
+    suite siga corriendo y lo reporta. */
+async function ensureOwner(o) {
+  const res = await fetch(`${BASE}/api/register`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: o.email, password: o.password, ownerName: o.name, businessName: o.biz }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) { await confirmUser(o.email); return { via: "route", data }; }
+  if (res.status !== 429) return { via: "error", data, status: res.status };
+
+  const { data: created } = await admin.auth.admin.createUser({ email: o.email, password: o.password, email_confirm: true });
+  const { data: biz } = await admin.from("businesses").insert({ name: o.biz }).select().single();
+  await admin.from("profiles").insert({ id: created.user.id, business_id: biz.id, name: o.name, role: "owner" });
+  return { via: "admin", data };
+}
+
+async function emptyBucket(bucket, prefix) {
+  const { data: entries } = await admin.storage.from(bucket).list(prefix);
+  for (const entry of entries || []) {
+    const path = `${prefix}/${entry.name}`;
+    if (entry.id === null) await emptyBucket(bucket, path); // carpeta
+    else await admin.storage.from(bucket).remove([path]);
+  }
+}
+
 async function cleanup() {
   const { data: users } = await admin.auth.admin.listUsers({ perPage: 1000 });
   const testUsers = (users?.users || []).filter((u) => u.email?.endsWith("@cuadra-test.dev"));
   const ids = testUsers.map((u) => u.id);
+  let bizIds = [];
   if (ids.length) {
     await admin.from("expenses").delete().in("runner_id", ids);
     const { data: profs } = await admin.from("profiles").select("business_id").in("id", ids);
-    const bizIds = [...new Set((profs || []).map((p) => p.business_id))];
+    bizIds = [...new Set((profs || []).map((p) => p.business_id))];
     if (bizIds.length) {
       await admin.from("fundings").delete().in("business_id", bizIds);
       for (const b of bizIds) {
-        const { data: files } = await admin.storage.from("receipts").list(b);
-        if (files?.length) await admin.storage.from("receipts").remove(files.map((f) => `${b}/${f.name}`));
+        await emptyBucket("receipts", b);
+        await emptyBucket("cash-photos", b);
       }
     }
     for (const id of ids) await admin.auth.admin.deleteUser(id);
@@ -54,12 +93,15 @@ async function cleanup() {
 // ---------- arranque limpio por si quedó basura de una corrida anterior ----------
 await cleanup();
 
-// 1. Registro del dueño vía la ruta real
-let res = await fetch(`${BASE}/api/register`, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email: OWNER.email, password: OWNER.password, ownerName: OWNER.name, businessName: OWNER.biz }),
-});
-check("POST /api/register crea dueño + negocio", res.ok, `status ${res.status}`);
+// 1. Registro del dueño (ruta real; con fallback si topa el límite de correos)
+let res;
+const reg = await ensureOwner(OWNER);
+check("Alta del dueño + negocio", reg.via !== "error", reg.via === "admin" ? "límite de correos de Supabase: provisionado por admin" : `vía ${reg.via}`);
+if (reg.via === "route") {
+  check("El registro pide verificación por correo", reg.data.needsConfirm === true);
+} else {
+  check("El registro pide verificación por correo", true, "no verificable con el límite de correos activo");
+}
 
 // 2. Login del dueño
 const ownerSb = createClient(URL_, ANON, { auth: { persistSession: false } });
@@ -71,69 +113,96 @@ const { data: ownerProf } = await ownerSb.from("profiles").select("*").eq("id", 
 check("Perfil owner con business_id", ownerProf?.role === "owner" && !!ownerProf?.business_id);
 const BIZ = ownerProf.business_id;
 
-// 3. Dueño da de alta al mandadero vía la ruta real (auth por cookie)
+// 3. Dueño da de alta al encargado de compra vía la ruta real (auth por cookie)
 res = await fetch(`${BASE}/api/create-runner`, {
   method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
   body: JSON.stringify({ email: RUNNER.email, password: RUNNER.password, name: RUNNER.name }),
 });
 check("POST /api/create-runner (dueño autenticado)", res.ok, `status ${res.status}`);
 
-// 4. Login del mandadero
+// 4. Login del encargado
 const runnerSb = createClient(URL_, ANON, { auth: { persistSession: false } });
 const { data: runnerAuth, error: rLoginErr } = await runnerSb.auth.signInWithPassword({ email: RUNNER.email, password: RUNNER.password });
-check("Login mandadero", !rLoginErr && !!runnerAuth?.session);
+check("Login encargado de compra", !rLoginErr && !!runnerAuth?.session);
+const runnerCookie = authCookie(runnerAuth.session);
 
-// 5. RLS: el mandadero NO puede crear fundings
+// 5. RLS: el encargado NO puede crear fundings
 const { error: fDenied } = await runnerSb.from("fundings").insert({ business_id: BIZ, amount: 500, note: "no debería" });
-check("RLS: runner NO puede recargar saldo", !!fDenied);
+check("RLS: encargado NO puede recargar saldo", !!fDenied);
 
-// 6. El dueño recarga (funding real)
-const { data: fund, error: fErr } = await ownerSb.from("fundings").insert({ business_id: BIZ, runner_id: runnerAuth.user.id, amount: 2000, note: "Fondo del día" }).select().single();
-check("Dueño inserta funding $2000", !fErr && !!fund);
+// 6. El dueño recarga con foto de entrega (obligatoria en la UI)
+const jpegB64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
+const jpegBlob = () => new Blob([Buffer.from(jpegB64, "base64")], { type: "image/jpeg" });
+const today = new Date().toISOString().slice(0, 10);
+const fundId = crypto.randomUUID();
+const cashPath = `${BIZ}/${today.slice(0, 7)}/${today}_${fundId}.jpg`;
+const { error: cashUpErr } = await ownerSb.storage.from("cash-photos").upload(cashPath, jpegBlob(), { contentType: "image/jpeg" });
+check("Dueño sube foto de entrega de efectivo (carpeta del mes)", !cashUpErr, cashUpErr?.message);
 
-// 7. El mandadero ve el funding (para su barra de saldo)
+const { data: fund, error: fErr } = await ownerSb.from("fundings").insert({ id: fundId, business_id: BIZ, runner_id: runnerAuth.user.id, amount: 2000, note: "Fondo del día", photo_path: cashPath }).select().single();
+check("Dueño inserta funding $2000 con photo_path", !fErr && !!fund?.photo_path, fErr?.message);
+
+// 7. RLS: el encargado NO puede subir ni leer fotos de entregas de efectivo
+const { error: cashDenied } = await runnerSb.storage.from("cash-photos").upload(`${BIZ}/${today.slice(0, 7)}/intruso.jpg`, jpegBlob(), { contentType: "image/jpeg" });
+check("RLS: encargado NO sube fotos de efectivo", !!cashDenied);
+
+res = await fetch(`${BASE}/api/receipt-url?path=${encodeURIComponent(cashPath)}&bucket=cash-photos`, { headers: { Cookie: runnerCookie } });
+check("El encargado NO puede ver fotos de entregas (403)", res.status === 403, `status ${res.status}`);
+
+// 8. El encargado ve el funding (para su división de efectivo)
 const { data: rFunds } = await runnerSb.from("fundings").select("*");
-check("Runner lee fundings de su negocio", (rFunds || []).length === 1);
+check("Encargado lee fundings de su negocio", (rFunds || []).length === 1);
 
-// 8. El mandadero registra un gasto
+// 9. El encargado registra una compra en EFECTIVO (fecha la pone el sistema)
 const expId = crypto.randomUUID();
 const { data: exp, error: eErr } = await runnerSb.from("expenses").insert({
   id: expId, business_id: BIZ, runner_id: runnerAuth.user.id,
-  store: "HEB", category: "Frutas y verduras", concept: "", subtotal: 420.5, iva: 67.28, ieps: 0, total: 487.78,
-  items: [{ name: "Jitomate saladet kg", qty: 5, price: 145 }], source: "manual", spent_at: new Date().toISOString().slice(0, 10),
+  store: "HEB", payment_method: "efectivo", subtotal: 420.5, iva: 67.28, ieps: 12, total: 487.78,
+  items: [{ name: "Jitomate saladet kg", qty: 5, price: 145 }], source: "ocr",
+  photo_path: `${BIZ}/${expId}.jpg`, spent_at: today,
 }).select().single();
-check("Runner inserta gasto $487.78", !eErr && !!exp, eErr?.message);
+check("Encargado registra compra en efectivo $487.78", !eErr && exp?.payment_method === "efectivo", eErr?.message);
 
-// 9. RLS: el runner no puede registrar gastos a nombre de otro
+// 10. Y una compra con TARJETA (no toca el efectivo)
+const cardId = crypto.randomUUID();
+const { data: cardExp, error: cErr } = await runnerSb.from("expenses").insert({
+  id: cardId, business_id: BIZ, runner_id: runnerAuth.user.id,
+  store: "Office Depot", payment_method: "tarjeta", subtotal: 300, iva: 48, ieps: 0, total: 348,
+  items: [], source: "ocr", photo_path: `${BIZ}/${cardId}.jpg`, spent_at: today,
+}).select().single();
+check("Encargado registra compra con tarjeta $348", !cErr && cardExp?.payment_method === "tarjeta", cErr?.message);
+
+// 11. RLS: el encargado no puede registrar compras a nombre de otro
 const { error: eDenied } = await runnerSb.from("expenses").insert({
-  business_id: BIZ, runner_id: ownerAuth.user.id, store: "X", category: "Otros", total: 1, source: "manual",
+  business_id: BIZ, runner_id: ownerAuth.user.id, store: "X", payment_method: "efectivo", total: 1, source: "ocr",
 });
-check("RLS: runner NO inserta gastos de otro usuario", !!eDenied);
+check("RLS: encargado NO inserta compras de otro usuario", !!eDenied);
 
-// 10. El dueño ve el gasto; saldo cuadra
+// 12. Las dos divisiones cuadran: efectivo resta, tarjeta suma desde cero
 const { data: oExps } = await ownerSb.from("expenses").select("*");
 const { data: oFunds } = await ownerSb.from("fundings").select("*");
-const saldo = (oFunds || []).reduce((s, f) => s + Number(f.amount), 0) - (oExps || []).reduce((s, e) => s + Number(e.total), 0);
-check("Dueño ve el gasto del runner", (oExps || []).length === 1);
-check("Saldo = Σfundings − Σexpenses = $1512.22", Math.abs(saldo - 1512.22) < 0.001, `saldo ${saldo}`);
+const funded = (oFunds || []).reduce((s, f) => s + Number(f.amount), 0);
+const cashSpent = (oExps || []).filter((e) => e.payment_method === "efectivo").reduce((s, e) => s + Number(e.total), 0);
+const cardSpent = (oExps || []).filter((e) => e.payment_method === "tarjeta").reduce((s, e) => s + Number(e.total), 0);
+check("Dueño ve las 2 compras del encargado", (oExps || []).length === 2);
+check("División EFECTIVO = Σfundings − Σefectivo = $1512.22", Math.abs(funded - cashSpent - 1512.22) < 0.001, `saldo ${funded - cashSpent}`);
+check("División TARJETA = Σtarjeta = $348 (empieza en cero)", Math.abs(cardSpent - 348) < 0.001, `tarjeta ${cardSpent}`);
 
-// 11. Aislamiento multi-negocio: otro dueño no ve NADA de este negocio
-await fetch(`${BASE}/api/register`, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email: OWNER2.email, password: OWNER2.password, ownerName: OWNER2.name, businessName: OWNER2.biz }),
-});
+const iepsTotal = (oExps || []).reduce((s, e) => s + Number(e.ieps), 0);
+check("IEPS acumulado disponible para el 4º cuadro", Math.abs(iepsTotal - 12) < 0.001, `ieps ${iepsTotal}`);
+
+// 13. Aislamiento multi-negocio: otro dueño no ve NADA de este negocio
+await ensureOwner(OWNER2);
 const owner2Sb = createClient(URL_, ANON, { auth: { persistSession: false } });
 await owner2Sb.auth.signInWithPassword({ email: OWNER2.email, password: OWNER2.password });
 const { data: o2Exps } = await owner2Sb.from("expenses").select("*");
 const { data: o2Funds } = await owner2Sb.from("fundings").select("*");
-check("RLS: otro negocio ve 0 gastos y 0 fundings", (o2Exps || []).length === 0 && (o2Funds || []).length === 0);
+check("RLS: otro negocio ve 0 compras y 0 fundings", (o2Exps || []).length === 0 && (o2Funds || []).length === 0);
 
-// 12. Storage: runner sube foto del ticket, dueño obtiene signed URL
-const jpegB64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
+// 14. Storage de tickets: el encargado sube, SOLO el dueño ve
 const photoPath = `${BIZ}/${expId}.jpg`;
-const jpegBlob = new Blob([Buffer.from(jpegB64, "base64")], { type: "image/jpeg" });
-const { error: upErr } = await runnerSb.storage.from("receipts").upload(photoPath, jpegBlob, { contentType: "image/jpeg" });
-check("Runner sube foto al bucket privado", !upErr, upErr?.message);
+const { error: upErr } = await runnerSb.storage.from("receipts").upload(photoPath, jpegBlob(), { contentType: "image/jpeg" });
+check("Encargado sube foto del ticket al bucket privado", !upErr, upErr?.message);
 
 res = await fetch(`${BASE}/api/receipt-url?path=${encodeURIComponent(photoPath)}`, { headers: { Cookie: ownerCookie } });
 const urlData = await res.json().catch(() => ({}));
@@ -143,13 +212,46 @@ if (urlData.url) {
   check("La signed URL sirve la foto", photoRes.ok);
 }
 
+res = await fetch(`${BASE}/api/receipt-url?path=${encodeURIComponent(photoPath)}`, { headers: { Cookie: runnerCookie } });
+check("El encargado NO puede ver los tickets guardados (403)", res.status === 403, `status ${res.status}`);
+
 // El bucket es privado: sin firma no se ve
 const rawRes = await fetch(`${URL_}/storage/v1/object/public/receipts/${photoPath}`);
 check("La foto NO es pública sin signed URL", !rawRes.ok);
 
-// 13. OCR por la ruta real, autenticado (imagen mínima → ilegible es lo esperado)
+// 15. Link del Excel: /ticket/:id lleva a la foto (solo dueño)
+res = await fetch(`${BASE}/ticket/${expId}`, { headers: { Cookie: ownerCookie }, redirect: "manual" });
+check("GET /ticket/:id redirige a la foto para el dueño", res.status >= 300 && res.status < 400, `status ${res.status}`);
+
+res = await fetch(`${BASE}/ticket/${expId}`, { headers: { Cookie: runnerCookie }, redirect: "manual" });
+check("GET /ticket/:id bloqueado para el encargado", res.status === 403, `status ${res.status}`);
+
+// 16. Alerta de efectivo bajo: con $1512 no salta; tras gastar más, sí
+res = await fetch(`${BASE}/api/low-balance`, { method: "POST", headers: { Cookie: ownerCookie } });
+let lowData = await res.json().catch(() => ({}));
+check("POST /api/low-balance: sin alerta con saldo alto", res.ok && lowData.alert === false, `saldo ${lowData.balance}`);
+
+await runnerSb.from("expenses").insert({
+  business_id: BIZ, runner_id: runnerAuth.user.id, store: "Soriana", payment_method: "efectivo",
+  subtotal: 900, iva: 0, ieps: 0, total: 900, items: [], source: "ocr", spent_at: today,
+});
+res = await fetch(`${BASE}/api/low-balance`, { method: "POST", headers: { Cookie: ownerCookie } });
+lowData = await res.json().catch(() => ({}));
+check("POST /api/low-balance: alerta al bajar de $700", res.ok && lowData.alert === true, `saldo ${lowData.balance}`);
+
+const { data: bizRow } = await admin.from("businesses").select("low_cash_alerted").eq("id", BIZ).single();
+check("La alerta se marca para no repetirse", bizRow?.low_cash_alerted === true);
+
+// Al recargar, el flag se resetea
+await admin.from("fundings").insert({ business_id: BIZ, amount: 3000, note: "Recarga E2E", photo_path: cashPath });
+res = await fetch(`${BASE}/api/low-balance`, { method: "POST", headers: { Cookie: ownerCookie } });
+lowData = await res.json().catch(() => ({}));
+const { data: bizRow2 } = await admin.from("businesses").select("low_cash_alerted").eq("id", BIZ).single();
+check("Tras recargar, la alerta se reinicia", lowData.alert === false && bizRow2?.low_cash_alerted === false);
+
+// 17. OCR por la ruta real, autenticado (imagen mínima → ilegible es lo esperado)
 res = await fetch(`${BASE}/api/read-receipt`, {
-  method: "POST", headers: { "Content-Type": "application/json", Cookie: authCookie(runnerAuth.session) },
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: runnerCookie },
   body: JSON.stringify({ image: jpegB64 }),
 });
 check("POST /api/read-receipt autenticado responde (422 ilegible esperado)", res.status === 422 || res.ok, `status ${res.status}`);

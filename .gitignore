@@ -6,3 +6,9 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+.vercel
+.env*
+
+# documentos personales
+*.docx

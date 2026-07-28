@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 
 /**
- * POST /api/create-runner — el DUEÑO da de alta a su mandadero.
+ * POST /api/create-runner — el DUEÑO da de alta a su encargado de compra.
  * body: { email, password, name }
  */
 export async function POST(req: Request) {
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
 
   if (!email || !email.includes("@")) return NextResponse.json({ error: "Escribe un correo válido." }, { status: 400 });
   if (password.length < 8) return NextResponse.json({ error: "La contraseña debe tener al menos 8 caracteres." }, { status: 400 });
-  if (!name) return NextResponse.json({ error: "Escribe el nombre del mandadero." }, { status: 400 });
+  if (!name) return NextResponse.json({ error: "Escribe el nombre del encargado." }, { status: 400 });
 
   const admin = supabaseAdmin();
 

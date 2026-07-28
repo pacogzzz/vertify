@@ -170,6 +170,54 @@ html, body { margin: 0; padding: 0; background: #EEF1EC; }
 @media(prefers-reduced-motion:reduce){.cuadra *{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
 
 /* ============================================================
+   v2 — fecha automática, divisiones Efectivo/Tarjeta, calendario,
+   ticket obligatorio y galería de fotos
+   ============================================================ */
+
+/* fecha automática arriba */
+.cuadra .datebar{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--muted);padding:2px 4px 10px;text-transform:capitalize;}
+.cuadra .datebar.in-sheet{background:var(--paper);border-radius:11px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;text-transform:none;}
+
+/* dos divisiones dentro de la misma sección */
+.cuadra .duo{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;margin-top:12px;position:relative;}
+.cuadra .duo-col{min-width:0;}
+.cuadra .duo-sep{width:1px;background:rgba(255,255,255,.16);}
+.cuadra .duo-tag{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.06em;opacity:.75;}
+.cuadra .duo-amount{font-size:28px;margin:7px 0 4px;}
+@media(max-width:420px){.cuadra .duo-amount{font-size:23px;}}
+
+/* 4 cuadros de resumen */
+.cuadra .sumgrid.four{grid-template-columns:repeat(2,1fr);}
+@media(min-width:560px){.cuadra .sumgrid.four{grid-template-columns:repeat(4,1fr);}}
+
+/* calendario */
+.cuadra .cal{margin-top:12px;padding:12px 12px 4px;}
+.cuadra .cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.cuadra .cal-title{font-family:var(--disp);font-weight:700;font-size:15px;text-transform:capitalize;}
+.cuadra .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;}
+.cuadra .cal-dow{text-align:center;font-size:11px;font-weight:700;color:var(--muted);padding:4px 0;}
+.cuadra .cal-day{position:relative;border:0;background:transparent;font:inherit;font-size:13.5px;font-weight:500;color:var(--ink);border-radius:10px;padding:9px 0 13px;cursor:pointer;transition:.12s;}
+.cuadra .cal-day:hover{background:var(--paper);}
+.cuadra .cal-day.today{font-weight:700;color:var(--saldo-deep);}
+.cuadra .cal-day.in{background:#E2F2E9;}
+.cuadra .cal-day.edge{background:var(--saldo);color:#fff;font-weight:700;}
+.cuadra .cal-dot{position:absolute;left:50%;transform:translateX(-50%);bottom:4px;width:5px;height:5px;border-radius:50%;background:var(--saldo);}
+.cuadra .cal-day.edge .cal-dot{background:#fff;}
+.cuadra .cal-foot{display:flex;justify-content:space-between;align-items:center;padding:8px 4px 10px;flex-wrap:wrap;gap:6px;}
+.cuadra .linkbtn.on{color:var(--saldo-deep);}
+.cuadra .mini-btn.active-cal{border-color:var(--saldo);color:var(--saldo-deep);}
+
+/* revisión del ticket */
+.cuadra .ticket-check,.cuadra .ticket-ok{display:flex;gap:14px;align-items:flex-start;margin-top:12px;padding:13px;background:var(--paper);border-radius:14px;}
+.cuadra .ticket-check img,.cuadra .ticket-ok img{width:84px;border-radius:10px;border:1px solid var(--line);flex-shrink:0;}
+.cuadra .ticket-ok>div{flex:1;min-width:0;}
+
+/* galería de fotos */
+.cuadra .foto-item{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px;}
+.cuadra .foto-cap{font-size:13px;color:#37463D;margin-bottom:2px;}
+.cuadra .foto-item .exp-photo img{max-width:100%;}
+
+/* ============================================================
    Auth (login / registro) — misma paleta y tipografías
    ============================================================ */
 .cuadra .auth-wrap{max-width:420px;margin:0 auto;padding:48px 20px 60px;}

@@ -1,7 +1,7 @@
 {
-  "name": "Cuadra",
-  "short_name": "Cuadra",
-  "description": "Control de gastos del mandadero: fondo, tickets y saldo al día.",
+  "name": "Vertify",
+  "short_name": "Vertify",
+  "description": "Control de gastos del encargado de compra: fondo, tickets y saldo al día.",
   "lang": "es-MX",
   "start_url": "/",
   "scope": "/",

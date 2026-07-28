@@ -4,6 +4,8 @@ export interface Business {
   id: string;
   name: string;
   daily_float: number;
+  low_cash_threshold: number;
+  low_cash_alerted: boolean;
 }
 
 export interface Profile {
@@ -25,8 +27,9 @@ export interface ExpenseRow {
   business_id: string;
   runner_id: string;
   store: string;
-  category: string;
+  category: string | null;
   concept: string | null;
+  payment_method: "efectivo" | "tarjeta";
   subtotal: number;
   iva: number;
   ieps: number;
@@ -44,6 +47,7 @@ export interface FundingRow {
   runner_id: string | null;
   amount: number;
   note: string | null;
+  photo_path: string | null;
   created_at: string;
 }
 
