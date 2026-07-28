@@ -29,8 +29,9 @@ Variables de `.env.local`:
 | `SUPABASE_SERVICE_ROLE_KEY` | **solo server** | Crea cuentas y firma URLs de fotos |
 | `GEMINI_API_KEY` | **solo server** | OCR de tickets (Google AI Studio, free tier) |
 | `ANTHROPIC_API_KEY` | **solo server** | Opcional: fallback de OCR de pago |
-| `RESEND_API_KEY` | **solo server** | Opcional: correo de aviso de efectivo bajo |
-| `EMAIL_FROM` | **solo server** | Remitente verificado en Resend |
+| `SMTP_HOST` / `SMTP_PORT` | **solo server** | Opcional: servidor de correo para el aviso de efectivo bajo |
+| `SMTP_USER` / `SMTP_PASS` | **solo server** | Usuario y contraseña de ese servidor |
+| `EMAIL_FROM` | **solo server** | Remitente de los avisos |
 
 ## 2. Base de datos
 
@@ -47,7 +48,7 @@ supabase/migrations/0002_vertify.sql  # efectivo/tarjeta, fotos de entrega, aler
 
 El alta del dueño usa `signUp`, así que Supabase manda un correo de confirmación y la cuenta **no puede entrar hasta confirmarlo**.
 
-> **Importante:** el servicio de correo integrado de Supabase solo permite **~2 correos por hora**. Para producción hay que configurar **SMTP propio** en *Authentication → Emails → SMTP Settings* (Resend funciona bien y es gratis hasta 100 correos/día). Sin eso, los registros fallarán con "límite de correos" en cuanto haya un poco de uso.
+> **Importante:** el servicio de correo integrado de Supabase solo permite **~2 correos por hora**. Para producción hay que configurar **SMTP propio** en *Authentication → Emails → SMTP Settings*. Sin dominio propio, Gmail funciona bien: host `smtp.gmail.com`, puerto `465`, tu correo como usuario, y una **contraseña de aplicación** de Google como contraseña. Sin eso, los registros fallarán con "límite de correos" en cuanto haya un poco de uso.
 
 ## 4. Fotos (tickets y entregas de efectivo)
 
@@ -68,7 +69,7 @@ La lista de tiendas vive en `lib/stores.ts`.
 
 ## 6. Aviso de efectivo bajo
 
-Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la app muestra un aviso a **ambos** roles y, si hay `RESEND_API_KEY`, manda un correo a los dos. El aviso se manda **una sola vez** y se reinicia solo cuando se recarga por encima del umbral.
+Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la app muestra un aviso a **ambos** roles y, si hay SMTP configurado, manda un correo a los dos. Conviene usar el mismo servidor de correo que Supabase. El aviso se manda **una sola vez** y se reinicia solo cuando se recarga por encima del umbral.
 
 ## 7. OCR de tickets
 
