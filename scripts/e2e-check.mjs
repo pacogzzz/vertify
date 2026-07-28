@@ -204,6 +204,18 @@ const photoPath = `${BIZ}/${expId}.jpg`;
 const { error: upErr } = await runnerSb.storage.from("receipts").upload(photoPath, jpegBlob(), { contentType: "image/jpeg" });
 check("Encargado sube foto del ticket al bucket privado", !upErr, upErr?.message);
 
+/* Regresión: `upsert: true` obliga a Storage a LEER el objeto antes de escribirlo, y
+   desde 0002 el encargado ya no tiene permiso de lectura sobre receipts. La app lo
+   usaba y por eso fallaba con "No se pudo subir la foto". Si este check empieza a
+   pasar es que cambiaron las policies; si la app vuelve a usar upsert, romperá. */
+const { error: upsertErr } = await runnerSb.storage.from("receipts")
+  .upload(`${BIZ}/${crypto.randomUUID()}.jpg`, jpegBlob(), { contentType: "image/jpeg", upsert: true });
+check("Encargado con upsert:true es rechazado (la app NO debe usar upsert)", !!upsertErr, upsertErr?.message);
+
+// Sin upsert, el encargado tampoco puede sobrescribir un ticket ya subido
+const { error: overwriteErr } = await runnerSb.storage.from("receipts").upload(photoPath, jpegBlob(), { contentType: "image/jpeg" });
+check("Encargado NO puede sobrescribir un ticket ya subido", !!overwriteErr, overwriteErr?.message);
+
 res = await fetch(`${BASE}/api/receipt-url?path=${encodeURIComponent(photoPath)}`, { headers: { Cookie: ownerCookie } });
 const urlData = await res.json().catch(() => ({}));
 check("GET /api/receipt-url devuelve signed URL al dueño", res.ok && !!urlData.url);

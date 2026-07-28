@@ -59,11 +59,18 @@ Todo vive en **Supabase Storage**, en dos buckets **privados**:
 
 Solo el dueño puede verlas (RLS + signed URLs de 1 hora generadas en el server). El botón **Ver fotos** abre la galería del rango de fechas elegido, y el Excel incluye una columna **Link de ticket** que apunta a `/ticket/{id}` (pide sesión de dueño y redirige a la foto).
 
+> **No usar `upsert: true` al subir.** Con upsert, Storage lee el objeto antes de escribirlo, y desde `0002` el encargado ya no tiene permiso de lectura sobre `receipts`: la subida falla con un 403 de RLS. Las rutas llevan un UUID nuevo cada vez, así que no hay nada que reemplazar. El E2E tiene un check que falla si esto se revierte.
+
 ## 5. Cómo se usa
 
 **Dueño:** crea el negocio en `/registro`, confirma su correo, y desde Ajustes crea la cuenta del **encargado de compra**. Para recargar saldo **es obligatorio tomar la foto entregando el efectivo**. En su panel elige un día o un **rango de fechas** en el calendario, y ve cuatro cuadros (Gastado, Movimientos, IVA, IEPS), el desglose **por tienda**, los movimientos, y los botones **Ver fotos** y **Exportar a Excel**.
 
-**Encargado de compra:** un solo botón verde **REGISTRAR COMPRA** → elige *Efectivo* o *Tarjeta* → escoge la **tienda** de la lista y escribe la **cantidad** → sube la foto del ticket. El sistema revisa que el ticket se vea bien y, cuando lo aprueba, se habilita **Registrar**. La **fecha la pone la app sola** (se muestra arriba); no hay campo de fecha, categoría, concepto ni desglose de impuestos: el subtotal, IVA e IEPS salen del propio ticket.
+**Encargado de compra:** un solo botón verde **REGISTRAR COMPRA** → elige *Efectivo* o *Tarjeta* → escoge la **tienda** de la lista, anota el **total** y el desglose (**subtotal, IVA, IEPS**) y sube la foto del ticket. El sistema revisa que el ticket se vea bien y, cuando lo aprueba, se habilita **Registrar**. La **fecha la pone la app sola** (se muestra arriba); no hay campo de fecha, categoría ni concepto.
+
+**Obligatorio:** el total y la foto del ticket — las dos cosas que el encargado siempre tiene a la mano.
+**Opcional:** subtotal, IVA e IEPS, porque no todos los tickets los traen. Los campos aparecen siempre para que se acostumbre a llenarlos; si los deja vacíos se guarda lo que el OCR leyó del ticket.
+
+**Verificación cruzada:** el OCR lee el ticket y la app compara, campo por campo, lo anotado contra lo leído (tolerancia de $1 por redondeos), y además revisa que *subtotal + IVA + IEPS = total*. Si algo no coincide se muestra la diferencia y hay que marcar una casilla de confirmación para registrar de todos modos — así el encargado nunca queda atorado si el OCR se equivoca, pero tampoco pasa un dato mal sin darse cuenta. El botón **Copiar del ticket** llena de golpe lo que el ticket sí trae.
 
 La lista de tiendas vive en `lib/stores.ts`.
 

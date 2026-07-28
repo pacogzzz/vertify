@@ -126,6 +126,44 @@ interface TicketState {
 }
 const TICKET_NONE: TicketState = { status: "none", thumb: null, ocr: null, error: "" };
 
+/* ---------- montos que anota el encargado ----------
+   Total: obligatorio. Subtotal / IVA / IEPS: se piden siempre, pero se puede
+   registrar sin ellos porque a veces el ticket no los trae. El sistema
+   compara lo anotado contra lo que leyó del ticket. */
+interface Montos { total: string; subtotal: string; iva: string; ieps: string }
+const MONTOS_VACIOS: Montos = { total: "", subtotal: "", iva: "", ieps: "" };
+
+/** Tolerancia al comparar contra el ticket: un peso, por redondeos del OCR. */
+const TOL = 1;
+
+interface Dif { label: string; anotado: number; ticket: number }
+
+/** Compara lo que anotó el encargado contra lo que dice el ticket. */
+function revisarMontos(m: Montos, ocr: ReceiptData | null) {
+  const campos: { label: string; typed: string; ticket: number }[] = [
+    { label: "Total", typed: m.total, ticket: num(ocr?.total) },
+    { label: "Subtotal", typed: m.subtotal, ticket: num(ocr?.subtotal) },
+    { label: "IVA", typed: m.iva, ticket: num(ocr?.iva) },
+    { label: "IEPS", typed: m.ieps, ticket: num(ocr?.ieps) },
+  ];
+  const anotado = (s: string) => s.trim() !== "";
+  const difs: Dif[] = campos
+    .filter((c) => anotado(c.typed) && c.ticket > 0 && Math.abs(c.ticket - num(c.typed)) > TOL)
+    .map((c) => ({ label: c.label, anotado: num(c.typed), ticket: c.ticket }));
+
+  // Falta por llenar y el ticket sí lo trae
+  const faltantes = campos.filter((c) => !anotado(c.typed) && c.ticket > 0).map((c) => c.label);
+
+  // Cuadre aritmético: subtotal + IVA + IEPS debe dar el total
+  const sumaLista = num(m.subtotal) > 0 && num(m.iva) > 0 && num(m.total) > 0;
+  const suma = num(m.subtotal) + num(m.iva) + num(m.ieps);
+  const noCuadra = sumaLista && Math.abs(suma - num(m.total)) > TOL;
+
+  const revisados = campos.filter((c) => anotado(c.typed) && c.ticket > 0).length;
+  const todoBien = difs.length === 0 && !noCuadra && revisados > 0;
+  return { difs, faltantes, noCuadra, suma, todoBien, revisados };
+}
+
 /* ============================================================
    App
    ============================================================ */
@@ -207,21 +245,31 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
     }
   }
 
-  async function saveCompra(store: string, cantidad: string): Promise<string> {
+  async function saveCompra(store: string, m: Montos): Promise<string> {
     if (ticket.status !== "ok" || !apiB64Ref.current) return "Sube la foto del ticket para poder registrar.";
 
     const id = crypto.randomUUID();
     const path = `${biz.id}/${id}.jpg`;
-    const { error: upErr } = await sb.storage.from("receipts").upload(path, b64ToBlob(apiB64Ref.current), { contentType: "image/jpeg", upsert: true });
-    if (upErr) return "No se pudo subir la foto. Revisa tu conexión.";
+    // OJO: sin upsert. El id es nuevo cada vez, así que no hay nada que reemplazar,
+    // y `upsert: true` obliga a Storage a LEER el objeto primero — algo que el
+    // encargado ya no puede hacer (las fotos son solo del dueño desde 0002),
+    // así que fallaba con 403 y salía "No se pudo subir la foto".
+    const { error: upErr } = await sb.storage.from("receipts").upload(path, b64ToBlob(apiB64Ref.current), { contentType: "image/jpeg" });
+    if (upErr) return `No se pudo subir la foto: ${upErr.message}`;
 
     const p = ticket.ocr || {};
     const items = (p.items || []).filter((i) => (i.name || "").trim()).map((i) => ({ name: (i.name || "").trim(), qty: num(i.qty) || 1, price: num(i.price) }));
+    // Manda lo que anotó el encargado; si dejó un campo vacío (a veces el
+    // ticket no lo trae) se usa lo que el sistema leyó del ticket.
+    const anotadoO = (typed: string, delTicket: unknown) => (typed.trim() !== "" ? num(typed) : num(delTicket));
     const row = {
       id, business_id: biz.id, runner_id: profile.id,
       store, category: "", concept: "",
       payment_method: payMethod,
-      subtotal: num(p.subtotal), iva: num(p.iva), ieps: num(p.ieps), total: num(cantidad),
+      subtotal: anotadoO(m.subtotal, p.subtotal),
+      iva: anotadoO(m.iva, p.iva),
+      ieps: anotadoO(m.ieps, p.ieps),
+      total: num(m.total),
       items, source: "ocr" as const, photo_path: path,
       spent_at: todayISO(), // la fecha la pone el sistema, no el encargado
     };
@@ -241,8 +289,8 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
     const id = crypto.randomUUID();
     const iso = todayISO();
     const path = `${biz.id}/${iso.slice(0, 7)}/${iso}_${id}.jpg`; // carpeta por mes, nombre = fecha
-    const { error: upErr } = await sb.storage.from("cash-photos").upload(path, b64ToBlob(photoB64), { contentType: "image/jpeg", upsert: true });
-    if (upErr) return "No se pudo subir la foto. Revisa tu conexión.";
+    const { error: upErr } = await sb.storage.from("cash-photos").upload(path, b64ToBlob(photoB64), { contentType: "image/jpeg" });
+    if (upErr) return `No se pudo subir la foto: ${upErr.message}`;
 
     const row = { id, business_id: biz.id, runner_id: runner?.id ?? null, amount: num(amount), note: note || "Recarga", photo_path: path };
     const { data: saved, error } = await sb.from("fundings").insert(row).select().single();
@@ -307,7 +355,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
             <AlertTriangle size={15} />
             {isOwner
               ? `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Prepara la siguiente entrega.`
-              : `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Pídele más dinero a tu jefe.`}
+              : `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Pídele más dinero a tu superior.`}
           </div>
         )}
 
@@ -361,7 +409,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
             ? <SettingsForm biz={biz} runner={runner} onSave={saveConfig} onCreateRunner={() => setModal("runner")} onLogout={logout} />
             : (
               <div>
-                <p className="hint" style={{ fontSize: 14, marginBottom: 16 }}>Sesión de {profile.name}. Si necesitas cambiar algo de tu cuenta, pídeselo a tu jefe.</p>
+                <p className="hint" style={{ fontSize: 14, marginBottom: 16 }}>Sesión de {profile.name}. Si necesitas cambiar algo de tu cuenta, pídeselo a tu superior.</p>
                 <button className="btn btn-ghost btn-block" onClick={logout}><LogOut size={16} />Cerrar sesión</button>
               </div>
             )}
@@ -703,31 +751,52 @@ function FotosGallery({ expenses, fundings, initialSel }: { expenses: UIExpense[
 function CompraForm({ ticket, onPickPhoto, onSave, onCancel }: {
   ticket: TicketState;
   onPickPhoto: () => void;
-  onSave: (store: string, cantidad: string) => Promise<string>;
+  onSave: (store: string, m: Montos) => Promise<string>;
   onCancel: () => void;
 }) {
   const [store, setStore] = useState<string>("");
-  const [cantidad, setCantidad] = useState("");
+  const [m, setM] = useState<Montos>(MONTOS_VACIOS);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [confirmado, setConfirmado] = useState(false);
 
-  const ocrTotal = ticket.status === "ok" ? num(ticket.ocr?.total) : 0;
-  const mismatch = ocrTotal > 0 && num(cantidad) > 0 && Math.abs(ocrTotal - num(cantidad)) > 1;
+  const set = (k: keyof Montos) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setM((prev) => ({ ...prev, [k]: e.target.value }));
+    setConfirmado(false);
+  };
+
+  const ticketOK = ticket.status === "ok";
+  const rev = revisarMontos(m, ticket.ocr);
+  const hayProblema = ticketOK && (rev.difs.length > 0 || rev.noCuadra);
+
+  /** Copia al formulario lo que el sistema leyó del ticket. */
+  function autollenar() {
+    const o = ticket.ocr || {};
+    const put = (typed: string, delTicket: unknown) => (num(delTicket) > 0 ? String(num(delTicket)) : typed);
+    setM({
+      total: put(m.total, o.total),
+      subtotal: put(m.subtotal, o.subtotal),
+      iva: put(m.iva, o.iva),
+      ieps: put(m.ieps, o.ieps),
+    });
+    setConfirmado(false);
+  }
 
   async function submit() {
     if (!store) return setErr("Elige la tienda donde compraste.");
-    if (num(cantidad) <= 0) return setErr("Pon la cantidad que gastaste.");
-    if (ticket.status !== "ok") return setErr("Sube la foto del ticket. Es obligatoria.");
+    if (num(m.total) <= 0) return setErr("Pon el total que gastaste. Es obligatorio.");
+    if (!ticketOK) return setErr("Sube la foto del ticket. Es obligatoria.");
+    if (hayProblema && !confirmado) return setErr("Lo que anotaste no coincide con el ticket. Corrígelo, o marca la casilla si estás seguro.");
     setErr("");
     setSaving(true);
-    const failMsg = await onSave(store, cantidad);
+    const failMsg = await onSave(store, m);
     setSaving(false);
     if (failMsg) setErr(failMsg);
   }
 
   return (
     <div>
-      <div className="datebar in-sheet"><CalendarDays size={14} />La fecha se registra sola: {labelDateLong(todayISO())}</div>
+      <div className="datebar in-sheet"><CalendarDays size={14} />{labelDateLong(todayISO())}</div>
 
       <div className="field">
         <label className="label">¿En qué tienda compraste?</label>
@@ -738,8 +807,18 @@ function CompraForm({ ticket, onPickPhoto, onSave, onCancel }: {
       </div>
 
       <div className="field total-field" style={{ marginTop: 0 }}>
-        <label className="label">¿Cuánto gastaste?</label>
-        <input className="input total-input" value={cantidad} onChange={(e) => setCantidad(e.target.value)} inputMode="decimal" placeholder="0.00" />
+        <label className="label">Total que gastaste (obligatorio)</label>
+        <input className="input total-input" value={m.total} onChange={set("total")} inputMode="decimal" placeholder="0.00" />
+      </div>
+
+      <div className="field" style={{ marginTop: 12 }}>
+        <label className="label">Desglose del ticket</label>
+        <div className="row3b">
+          <div><div className="minilabel">Subtotal</div><input className="input mini" value={m.subtotal} onChange={set("subtotal")} inputMode="decimal" placeholder="0.00" /></div>
+          <div><div className="minilabel">IVA</div><input className="input mini" value={m.iva} onChange={set("iva")} inputMode="decimal" placeholder="0.00" /></div>
+          <div><div className="minilabel">IEPS</div><input className="input mini" value={m.ieps} onChange={set("ieps")} inputMode="decimal" placeholder="0.00" /></div>
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>Anótalos siempre que el ticket los traiga. Si tu ticket no los tiene, puedes dejarlos vacíos.</div>
       </div>
 
       {/* ticket obligatorio */}
@@ -756,15 +835,14 @@ function CompraForm({ ticket, onPickPhoto, onSave, onCancel }: {
           </div>
         </div>
       )}
-      {ticket.status === "ok" && (
+      {ticketOK && (
         <div className="ticket-ok">
           {ticket.thumb && <img src={ticket.thumb} alt="ticket" />}
           <div>
             <div className="banner-ok" style={{ margin: 0 }}><Check size={15} />Ticket aprobado. Se ve bien.</div>
             <div className="hint" style={{ marginTop: 8 }}>
-              El sistema registró del ticket: subtotal {money(num(ticket.ocr?.subtotal))} · IVA {money(num(ticket.ocr?.iva))} · IEPS {money(num(ticket.ocr?.ieps))}
+              El ticket dice: total {money(num(ticket.ocr?.total))} · subtotal {money(num(ticket.ocr?.subtotal))} · IVA {money(num(ticket.ocr?.iva))} · IEPS {money(num(ticket.ocr?.ieps))}
             </div>
-            {mismatch && <div className="hint" style={{ marginTop: 4, color: "var(--amber)" }}>El ticket dice {money(ocrTotal)}. Revisa tu cantidad.</div>}
             <button className="linkbtn" style={{ marginTop: 6 }} onClick={onPickPhoto}><Camera size={14} />Tomar otra foto</button>
           </div>
         </div>
@@ -776,11 +854,47 @@ function CompraForm({ ticket, onPickPhoto, onSave, onCancel }: {
         </div>
       )}
 
+      {/* revisión: lo anotado contra el ticket */}
+      {ticketOK && (
+        <div className={`verif ${hayProblema ? "verif-bad" : rev.todoBien ? "verif-ok" : ""}`}>
+          {hayProblema ? (
+            <>
+              <div className="verif-head"><AlertTriangle size={15} />Revisa estos datos</div>
+              {rev.difs.map((d) => (
+                <div className="verif-line" key={d.label}>
+                  <span>{d.label}</span>
+                  <span>anotaste <b>{money(d.anotado)}</b> · el ticket dice <b>{money(d.ticket)}</b></span>
+                </div>
+              ))}
+              {rev.noCuadra && (
+                <div className="verif-line">
+                  <span>La suma</span>
+                  <span>subtotal + IVA + IEPS da <b>{money(rev.suma)}</b>, no <b>{money(num(m.total))}</b></span>
+                </div>
+              )}
+              <label className="verif-check">
+                <input type="checkbox" checked={confirmado} onChange={(e) => setConfirmado(e.target.checked)} />
+                Ya lo revisé y mis datos son los correctos
+              </label>
+            </>
+          ) : rev.todoBien ? (
+            <div className="verif-head"><Check size={15} />Todo cuadra con el ticket</div>
+          ) : (
+            <div className="verif-head"><Receipt size={15} />Anota los datos del ticket para que el sistema los revise</div>
+          )}
+          {rev.faltantes.length > 0 && (
+            <button className="linkbtn" onClick={autollenar}>
+              <PencilLine size={14} />Copiar del ticket: {rev.faltantes.join(", ")}
+            </button>
+          )}
+        </div>
+      )}
+
       {err && <div className="err"><AlertTriangle size={14} />{err}</div>}
 
       <div className="row2" style={{ marginTop: 14 }}>
         <button className="btn btn-ghost btn-block" onClick={onCancel} disabled={saving}>Cancelar</button>
-        <button className="btn btn-primary btn-block" onClick={submit} disabled={saving || ticket.status !== "ok"}>
+        <button className="btn btn-primary btn-block" onClick={submit} disabled={saving || !ticketOK}>
           {saving ? <Loader2 className="spin" size={17} /> : <Check size={17} />}Registrar
         </button>
       </div>
