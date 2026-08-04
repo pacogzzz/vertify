@@ -186,9 +186,17 @@ html, body { margin: 0; padding: 0; background: #EEF1EC; }
 .cuadra .duo-amount{font-size:28px;margin:7px 0 4px;}
 @media(max-width:420px){.cuadra .duo-amount{font-size:23px;}}
 
+/* corte del día dentro de la tarjeta oscura */
+.cuadra .corte{margin-top:18px;padding-top:13px;border-top:1px solid rgba(255,255,255,.15);position:relative;}
+.cuadra .corte-head{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;opacity:.62;}
+.cuadra .corte-nums{display:flex;flex-wrap:wrap;gap:5px 16px;margin-top:9px;font-size:12.5px;opacity:.75;font-variant-numeric:tabular-nums;}
+.cuadra .corte-nums>span:first-child{opacity:1;display:flex;align-items:baseline;gap:5px;}
+.cuadra .corte-nums b{font-family:var(--disp);font-weight:700;font-size:17px;letter-spacing:-.02em;}
+
 /* 4 cuadros de resumen */
 .cuadra .sumgrid.four{grid-template-columns:repeat(2,1fr);}
 @media(min-width:560px){.cuadra .sumgrid.four{grid-template-columns:repeat(4,1fr);}}
+.cuadra .sumcard .s{font-size:11px;color:var(--muted);margin-top:5px;font-variant-numeric:tabular-nums;}
 
 /* calendario */
 .cuadra .cal{margin-top:12px;padding:12px 12px 4px;}

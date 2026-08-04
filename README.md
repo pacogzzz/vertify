@@ -74,6 +74,20 @@ Solo el dueño puede verlas (RLS + signed URLs de 1 hora generadas en el server)
 
 La lista de tiendas vive en `lib/stores.ts`.
 
+## 5.1 Corte diario (se reinicia a las 24:00)
+
+Todo lo que la pantalla llama *hoy* arranca en **cero a las 00:00**, para que un día no se mezcle con el anterior:
+
+- **Gastado hoy**, **efectivo de hoy**, **tarjeta de hoy** y **número de compras** se calculan solo con los movimientos cuyo `spent_at` es la fecha de hoy.
+- El **efectivo NO se reinicia**: es dinero real que se queda en la bolsa del encargado. Lo que se reinicia es el conteo y la barra, que vuelve a medirse contra el efectivo disponible **ese día** (`apertura + recargas de hoy`) en vez de contra todo lo entregado en la historia — antes la barra se iba encogiendo semana tras semana.
+- La **apertura** del día (`fundings anteriores − gastos en efectivo anteriores`) se muestra como *"arrancaste el día con $X"*.
+
+El corte lo dispara el hook `useToday` en `components/CuadraApp.tsx`: programa un temporizador a las 00:00:02, y además vuelve a revisar en `visibilitychange` y `focus` porque el temporizador no corre si el sistema durmió el proceso. Al cambiar el día recarga los datos, avisa con un toast, y si el dueño estaba viendo "hoy" en el calendario, la selección se mueve sola al día nuevo.
+
+> **Sin esto**, un teléfono que queda abierto toda la noche seguiría mostrando el día anterior: `todayISO()` solo se recalcula cuando algo provoca un render. El E2E tiene cuatro checks que siembran un día anterior completo y verifican que no se cuele en el corte de hoy.
+
+No hay nada que reiniciar en la base de datos: el corte se deriva de `spent_at` al leer, así que el histórico completo se conserva y el dueño lo sigue viendo con el calendario.
+
 ## 6. Aviso de efectivo bajo
 
 Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la app muestra un aviso a **ambos** roles y, si hay SMTP configurado, manda un correo a los dos. Conviene usar el mismo servidor de correo que Supabase. El aviso se manda **una sola vez** y se reinicia solo cuando se recarga por encima del umbral.

@@ -271,6 +271,33 @@ check("POST /api/read-receipt autenticado responde (422 ilegible esperado)", res
 res = await fetch(`${BASE}/api/read-receipt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: jpegB64 }) });
 check("POST /api/read-receipt SIN sesión → 401", res.status === 401);
 
+/* 18. Corte diario: lo de ayer NO se mezcla con lo de hoy.
+   Se siembra un día anterior completo (entrega + compras) y se recalcula el
+   corte con la misma fórmula que usa la pantalla (calcCorte en CuadraApp). */
+const ayer = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+await admin.from("fundings").insert({ business_id: BIZ, amount: 1000, note: "Fondo de ayer", photo_path: cashPath, created_at: `${ayer}T15:00:00Z` });
+await admin.from("expenses").insert([
+  { business_id: BIZ, runner_id: runnerAuth.user.id, store: "HEB", payment_method: "efectivo", subtotal: 0, iva: 0, ieps: 0, total: 600, items: [], source: "ocr", spent_at: ayer },
+  { business_id: BIZ, runner_id: runnerAuth.user.id, store: "Costco", payment_method: "tarjeta", subtotal: 0, iva: 0, ieps: 0, total: 150, items: [], source: "ocr", spent_at: ayer },
+]);
+
+const { data: allExp } = await ownerSb.from("expenses").select("*");
+const { data: allFund } = await ownerSb.from("fundings").select("*");
+const totalFunded = (allFund || []).reduce((s, f) => s + Number(f.amount), 0);
+const saldo = totalFunded - (allExp || []).filter((e) => e.payment_method === "efectivo").reduce((s, e) => s + Number(e.total), 0);
+
+const delDia = (allExp || []).filter((e) => e.spent_at === today);
+const efeHoy = delDia.filter((e) => e.payment_method === "efectivo").reduce((s, e) => s + Number(e.total), 0);
+const tarHoy = delDia.filter((e) => e.payment_method === "tarjeta").reduce((s, e) => s + Number(e.total), 0);
+const recargadoHoy = (allFund || []).filter((f) => (f.created_at || "").slice(0, 10) === today).reduce((s, f) => s + Number(f.amount), 0);
+const base = saldo + efeHoy;              // efectivo disponible hoy
+const apertura = base - recargadoHoy;     // con lo que amaneció = sobrante de ayer
+
+check("Corte: el día de hoy solo cuenta sus propias compras", delDia.length === 3 && (allExp || []).length === 5, `hoy ${delDia.length} de ${(allExp || []).length}`);
+check("Corte: TARJETA de hoy no arrastra la de ayer ($348, no $498)", Math.abs(tarHoy - 348) < 0.001, `tarjeta hoy ${tarHoy}`);
+check("Corte: el día abre con lo que sobró del anterior ($1000 − $600 = $400)", Math.abs(apertura - 400) < 0.001, `apertura ${apertura}`);
+check("Corte: el EFECTIVO sí se conserva de un día a otro (no vuelve a cero)", Math.abs(saldo - 4012.22) < 0.001, `saldo ${saldo}`);
+
 // ---------- limpieza ----------
 const removed = await cleanup();
 console.log(`\nLimpieza: ${removed} usuarios de prueba y sus datos eliminados.`);

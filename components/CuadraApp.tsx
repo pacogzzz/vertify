@@ -36,6 +36,45 @@ function labelTime(ts: number) {
   catch { return ""; }
 }
 
+/* ---------- corte diario: el día se reinicia solo a las 24:00 ----------
+   `todayISO()` solo se recalcula cuando algo provoca un render, así que un
+   teléfono que queda abierto toda la noche seguiría mostrando el día anterior
+   y las compras nuevas se irían mezclando. Este hook programa el corte a las
+   00:00 en punto, y además revisa al despertar la pantalla (el timer no corre
+   si el sistema durmió el proceso). */
+function useToday(onCorte?: () => void) {
+  const [hoy, setHoy] = useState(todayISO);
+  const hoyRef = useRef(hoy);
+  const cb = useRef(onCorte);
+  cb.current = onCorte;
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const revisar = () => {
+      const ahora = todayISO();
+      if (ahora === hoyRef.current) return;
+      hoyRef.current = ahora;
+      setHoy(ahora);
+      cb.current?.();
+    };
+    const programar = () => {
+      const d = new Date();
+      const medianoche = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 2).getTime();
+      timer = setTimeout(() => { revisar(); programar(); }, Math.max(1000, medianoche - d.getTime()));
+    };
+    programar();
+    document.addEventListener("visibilitychange", revisar);
+    window.addEventListener("focus", revisar);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", revisar);
+      window.removeEventListener("focus", revisar);
+    };
+  }, []);
+
+  return hoy;
+}
+
 /* ---------- tipos de UI ---------- */
 type PayMethod = "efectivo" | "tarjeta";
 
@@ -49,6 +88,35 @@ interface UIFunding { id: string; amount: number; dateISO: string; createdAt: nu
 
 /** Selección del calendario: un día (end === start), un rango, o null = todos */
 interface DateSel { start: string; end: string | null }
+
+/* ---------- corte del día ----------
+   Todo lo que dice "hoy" arranca en CERO a las 00:00. El efectivo NO se
+   reinicia, porque es dinero real que se queda en la bolsa del encargado: lo
+   que se reinicia es el conteo del día y la barra, que vuelve a llenarse con
+   el saldo con el que amaneció más lo que se le recargue durante el día. */
+interface Corte {
+  fecha: string;      // día del corte (ISO)
+  efectivo: number;   // gastado hoy en efectivo
+  tarjeta: number;    // gastado hoy con tarjeta
+  total: number;      // gastado hoy en total
+  movs: number;       // compras registradas hoy
+  apertura: number;   // efectivo con el que amaneció (lo que sobró de ayer)
+  recargado: number;  // efectivo entregado hoy
+  base: number;       // apertura + recargado = todo el efectivo disponible hoy
+}
+
+function calcCorte(fecha: string, expenses: UIExpense[], fundings: UIFunding[], cashBalance: number): Corte {
+  const delDia = expenses.filter((e) => e.dateISO === fecha);
+  const suma = (l: UIExpense[]) => l.reduce((s, e) => s + num(e.total), 0);
+  const efectivo = suma(delDia.filter((e) => e.payMethod === "efectivo"));
+  const tarjeta = suma(delDia.filter((e) => e.payMethod === "tarjeta"));
+  const recargado = fundings.filter((f) => f.dateISO === fecha).reduce((s, f) => s + num(f.amount), 0);
+  const base = cashBalance + efectivo; // lo que hubo disponible hoy = lo que queda + lo gastado hoy
+  return {
+    fecha, efectivo, tarjeta, total: efectivo + tarjeta, movs: delDia.length,
+    apertura: base - recargado, recargado, base,
+  };
+}
 
 function rowToUI(e: ExpenseRow): UIExpense {
   return {
@@ -205,14 +273,17 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
 
   const flash = (msg: string) => { setToast({ msg }); setTimeout(() => setToast(null), 2600); };
 
+  /* ----- corte a las 24:00: empieza un día nuevo y se recargan los datos ----- */
+  const hoy = useToday(() => { load(); flash("Nuevo día: el corte volvió a empezar"); });
+
   /* ----- derived: dos divisiones de dinero ----- */
   const totalFunded = fundings.reduce((s, f) => s + num(f.amount), 0);
   const cashSpent = expenses.filter((e) => e.payMethod === "efectivo").reduce((s, e) => s + num(e.total), 0);
-  const cardSpent = expenses.filter((e) => e.payMethod === "tarjeta").reduce((s, e) => s + num(e.total), 0);
-  const cashBalance = totalFunded - cashSpent; // división EFECTIVO: resta
+  const cashBalance = totalFunded - cashSpent; // división EFECTIVO: resta (es dinero real, se queda de un día a otro)
   const threshold = num(biz.low_cash_threshold) || 700;
   const lowCash = cashBalance <= threshold;
-  const todays = expenses.filter((e) => e.dateISO === todayISO()).sort((a, b) => b.createdAt - a.createdAt);
+  const corte = calcCorte(hoy, expenses, fundings, cashBalance);
+  const todays = expenses.filter((e) => e.dateISO === hoy).sort((a, b) => b.createdAt - a.createdAt);
   const runnerName = isOwner ? (runner?.name || "tu encargado de compra") : profile.name;
 
   /* ----- aviso servidor: revisa umbral y manda correos una sola vez ----- */
@@ -348,7 +419,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
         </header>
 
         {/* fecha automática, siempre visible arriba */}
-        <div className="datebar"><CalendarDays size={15} />{labelDateLong(todayISO())}</div>
+        <div className="datebar"><CalendarDays size={15} />{labelDateLong(hoy)}</div>
 
         {lowCash && (
           <div className="banner-warn" style={{ marginTop: 10 }}>
@@ -360,8 +431,8 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
         )}
 
         {!isOwner
-          ? <Encargado runnerName={runnerName} cashBalance={cashBalance} totalFunded={totalFunded} cardSpent={cardSpent} todays={todays} onCompra={startCompra} />
-          : <Dueno biz={biz} cashBalance={cashBalance} totalFunded={totalFunded} cardSpent={cardSpent} expenses={expenses} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />}
+          ? <Encargado runnerName={runnerName} cashBalance={cashBalance} corte={corte} todays={todays} onCompra={startCompra} />
+          : <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />}
       </div>
 
       {/* modals */}
@@ -437,14 +508,19 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
 /* ============================================================
    Sección de saldo: dos divisiones (Efectivo resta, Tarjeta suma)
    ============================================================ */
-function DuoBalance({ title, cashBalance, totalFunded, cardSpent, children }: {
-  title: string; cashBalance: number; totalFunded: number; cardSpent: number; children?: React.ReactNode;
+function DuoBalance({ title, cashBalance, corte, tu, children }: {
+  title: string; cashBalance: number; corte: Corte; tu: boolean; children?: React.ReactNode;
 }) {
-  const ratio = totalFunded > 0 ? Math.max(0, Math.min(1, cashBalance / totalFunded)) : (cashBalance > 0 ? 1 : 0);
+  /* La barra se mide contra el efectivo disponible HOY (lo que amaneció más las
+     recargas del día), no contra todo lo entregado en la historia: así vuelve a
+     llenarse cada mañana en vez de irse encogiendo semana tras semana. */
+  const ratio = corte.base > 0 ? Math.max(0, Math.min(1, cashBalance / corte.base)) : (cashBalance > 0 ? 1 : 0);
   let state = "ok";
   if (cashBalance <= 0) state = "empty";
   else if (ratio < 0.15) state = "low";
   else if (ratio < 0.4) state = "mid";
+
+  const arranque = tu ? "arrancaste el día con" : "el día arrancó con";
 
   return (
     <section className={`gauge-card owner g-${state}`}>
@@ -453,16 +529,30 @@ function DuoBalance({ title, cashBalance, totalFunded, cardSpent, children }: {
         <div className="duo-col">
           <div className="duo-tag"><Banknote size={14} />EFECTIVO</div>
           <div className="gauge-amount duo-amount">{money(cashBalance < 0 ? 0 : cashBalance)}</div>
-          <div className="gauge-of">de {money(totalFunded)} entregados · va restando</div>
+          <div className="gauge-of">
+            {arranque} {money(corte.apertura)}
+            {corte.recargado > 0 ? ` + ${money(corte.recargado)} de hoy` : ""}
+          </div>
           <div className="gauge-track"><div className={`gauge-fill f-${state}`} style={{ width: `${Math.max(ratio * 100, cashBalance > 0 ? 4 : 0)}%` }} /></div>
         </div>
         <div className="duo-sep" />
         <div className="duo-col">
-          <div className="duo-tag"><CreditCard size={14} />TARJETA</div>
-          <div className="gauge-amount duo-amount">{money(cardSpent)}</div>
-          <div className="gauge-of">gastado con tarjeta · empieza en cero y va sumando</div>
+          <div className="duo-tag"><CreditCard size={14} />TARJETA HOY</div>
+          <div className="gauge-amount duo-amount">{money(corte.tarjeta)}</div>
+          <div className="gauge-of">gastado hoy con tarjeta · vuelve a cero a media noche</div>
         </div>
       </div>
+
+      <div className="corte">
+        <div className="corte-head"><CalendarDays size={13} />Corte de hoy · se reinicia a las 24:00</div>
+        <div className="corte-nums">
+          <span><b>{money(corte.total)}</b> gastado</span>
+          <span>{money(corte.efectivo)} efectivo</span>
+          <span>{money(corte.tarjeta)} tarjeta</span>
+          <span>{corte.movs} {corte.movs === 1 ? "compra" : "compras"}</span>
+        </div>
+      </div>
+
       {children}
     </section>
   );
@@ -471,22 +561,21 @@ function DuoBalance({ title, cashBalance, totalFunded, cardSpent, children }: {
 /* ============================================================
    Vista del encargado de compra
    ============================================================ */
-function Encargado({ runnerName, cashBalance, totalFunded, cardSpent, todays, onCompra }: {
-  runnerName: string; cashBalance: number; totalFunded: number; cardSpent: number;
+function Encargado({ runnerName, cashBalance, corte, todays, onCompra }: {
+  runnerName: string; cashBalance: number; corte: Corte;
   todays: UIExpense[]; onCompra: () => void;
 }) {
-  const spentToday = todays.reduce((s, e) => s + num(e.total), 0);
   return (
     <>
-      <DuoBalance title={`Hola ${runnerName}, así va el dinero`} cashBalance={cashBalance} totalFunded={totalFunded} cardSpent={cardSpent} />
+      <DuoBalance title={`Hola ${runnerName}, así va el dinero`} cashBalance={cashBalance} corte={corte} tu />
 
       <div className="cta-stack">
         <button className="btn btn-primary btn-lg btn-block" onClick={onCompra}><Camera size={19} />REGISTRAR COMPRA</button>
       </div>
 
-      <div className="section-title"><span>Hoy gastaste</span><span className="muted" style={{ fontFamily: "var(--disp)", fontWeight: 600 }}>{money(spentToday)}</span></div>
+      <div className="section-title"><span>Tus compras de hoy</span><span className="muted" style={{ fontFamily: "var(--disp)", fontWeight: 600 }}>{money(corte.total)}</span></div>
       {todays.length === 0
-        ? <div className="card"><div className="empty"><div className="big">Aún no registras compras hoy</div>Pulsa REGISTRAR COMPRA y sube la foto del ticket.</div></div>
+        ? <div className="card"><div className="empty"><div className="big">Aún no registras compras hoy</div>Pulsa REGISTRAR COMPRA y sube la foto del ticket. Aquí solo aparece lo de hoy: a media noche la lista vuelve a empezar.</div></div>
         : <div className="card">{todays.map((e) => <ExpenseRowView key={e.id} e={e} />)}</div>}
     </>
   );
@@ -495,16 +584,28 @@ function Encargado({ runnerName, cashBalance, totalFunded, cardSpent, todays, on
 /* ============================================================
    Vista del dueño: calendario + 4 cuadros + tiendas + fotos
    ============================================================ */
-function Dueno({ biz, cashBalance, totalFunded, cardSpent, expenses, onRecarga, onFotos }: {
-  biz: Business; cashBalance: number; totalFunded: number; cardSpent: number;
+function Dueno({ biz, hoy, cashBalance, corte, expenses, onRecarga, onFotos }: {
+  biz: Business; hoy: string; cashBalance: number; corte: Corte;
   expenses: UIExpense[]; onRecarga: () => void; onFotos: (sel: DateSel | null) => void;
 }) {
-  const [sel, setSel] = useState<DateSel | null>({ start: todayISO(), end: todayISO() });
+  const [sel, setSel] = useState<DateSel | null>({ start: hoy, end: hoy });
   const [showCal, setShowCal] = useState(false);
+
+  /* Al dar la medianoche, si estaba viendo "hoy" que se pase al día nuevo en
+     vez de quedarse clavado en el de ayer. Si eligió otra fecha, no se toca. */
+  const hoyPrevio = useRef(hoy);
+  useEffect(() => {
+    const ayer = hoyPrevio.current;
+    if (ayer === hoy) return;
+    hoyPrevio.current = hoy;
+    setSel((s) => (s && s.start === ayer && (s.end || s.start) === ayer ? { start: hoy, end: hoy } : s));
+  }, [hoy]);
 
   const inSel = (iso: string) => !sel || (iso >= sel.start && iso <= (sel.end || sel.start));
   const periodExp = expenses.filter((e) => inSel(e.dateISO)).sort((a, b) => b.createdAt - a.createdAt);
   const spentP = periodExp.reduce((s, e) => s + num(e.total), 0);
+  const cashP = periodExp.filter((e) => e.payMethod === "efectivo").reduce((s, e) => s + num(e.total), 0);
+  const cardP = periodExp.filter((e) => e.payMethod === "tarjeta").reduce((s, e) => s + num(e.total), 0);
   const ivaP = periodExp.reduce((s, e) => s + num(e.iva), 0);
   const iepsP = periodExp.reduce((s, e) => s + num(e.ieps), 0);
 
@@ -522,18 +623,18 @@ function Dueno({ biz, cashBalance, totalFunded, cardSpent, expenses, onRecarga, 
   const periodLabel = !sel
     ? "en total"
     : sel.start === (sel.end || sel.start)
-      ? (sel.start === todayISO() ? "hoy" : `el ${labelDate(sel.start)}`)
+      ? (sel.start === hoy ? "hoy" : `el ${labelDate(sel.start)}`)
       : `del ${labelDate(sel.start)} al ${labelDate(sel.end || sel.start)}`;
 
   const csvName = !sel
-    ? `vertify_todo_${todayISO()}.csv`
+    ? `vertify_todo_${hoy}.csv`
     : sel.start === (sel.end || sel.start)
       ? `vertify_${sel.start}.csv`
       : `vertify_${sel.start}_a_${sel.end}.csv`;
 
   return (
     <>
-      <DuoBalance title="Dinero en manos de tu encargado de compra" cashBalance={cashBalance} totalFunded={totalFunded} cardSpent={cardSpent}>
+      <DuoBalance title="Dinero en manos de tu encargado de compra · ahora mismo" cashBalance={cashBalance} corte={corte} tu={false}>
         <button className="btn btn-onwhite" style={{ marginTop: 16 }} onClick={onRecarga}><Plus size={16} />Recargar saldo</button>
       </DuoBalance>
 
@@ -551,7 +652,11 @@ function Dueno({ biz, cashBalance, totalFunded, cardSpent, expenses, onRecarga, 
       {showCal && <CalendarPicker sel={sel} setSel={setSel} marked={new Set(expenses.map((e) => e.dateISO))} />}
 
       <div className="sumgrid four">
-        <div className="sumcard"><div className="k">Gastado {periodLabel}</div><div className="v">{money(spentP)}</div></div>
+        <div className="sumcard">
+          <div className="k">Gastado {periodLabel}</div>
+          <div className="v">{money(spentP)}</div>
+          <div className="s">{money(cashP)} efectivo · {money(cardP)} tarjeta</div>
+        </div>
         <div className="sumcard"><div className="k">Movimientos</div><div className="v">{periodExp.length}</div></div>
         <div className="sumcard"><div className="k">IVA</div><div className="v">{money(ivaP)}</div></div>
         <div className="sumcard"><div className="k">IEPS</div><div className="v">{money(iepsP)}</div></div>
