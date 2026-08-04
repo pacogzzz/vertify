@@ -25,4 +25,9 @@ export const TIENDAS = [
   "Tortillería (Toño)",
   "Soriana",
   "Office Depot",
+  "Gasolinera Arce",
+  "Carnívoro",
+  "Dulcería La Gardenia",
+  "Dulcería el Pájaro Loco",
+  "Agranel",
 ] as const;
