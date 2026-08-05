@@ -30,4 +30,5 @@ export const TIENDAS = [
   "Dulcería La Gardenia",
   "Dulcería el Pájaro Loco",
   "Agranel",
+  "Modelorama",
 ] as const;
