@@ -31,4 +31,5 @@ export const TIENDAS = [
   "Dulcería el Pájaro Loco",
   "Agranel",
   "Modelorama",
+  "Carnes Finas Don Juan",
 ] as const;
