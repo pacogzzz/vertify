@@ -11,7 +11,14 @@ const REF = new URL(URL_).hostname.split(".")[0];
 
 const OWNER = { email: "e2e-owner@cuadra-test.dev", password: "prueba-e2e-123", name: "E2E Dueño", biz: "E2E Negocio" };
 const OWNER2 = { email: "e2e-owner2@cuadra-test.dev", password: "prueba-e2e-123", name: "E2E Dueño 2", biz: "E2E Negocio 2" };
-const RUNNER = { email: "e2e-runner@cuadra-test.dev", password: "prueba-e2e-123", name: "E2E Rubén" };
+// Los colaboradores (Encargado, Chef, Administrador, Caja) entran con
+// usuario, sin correo real: por dentro Supabase Auth usa un correo
+// sintético `usuario@vertify.local` (ver lib/username.ts) que nunca recibe
+// nada. El prefijo "e2e-" es lo que cleanup() usa para poder borrarlos.
+const COLLAB_DOMAIN = "vertify.local";
+const collabEmail = (username) => `${username}@${COLLAB_DOMAIN}`;
+const RUNNER = { username: "e2e-runner", password: "prueba-e2e-123", name: "E2E Rubén" };
+const ADMIN_COLLAB = { username: "e2e-admin", password: "prueba-e2e-123", name: "E2E Admin" };
 
 const results = [];
 function check(name, ok, extra = "") {
@@ -68,9 +75,14 @@ async function emptyBucket(bucket, prefix) {
   }
 }
 
+function isTestUser(u) {
+  const email = u.email || "";
+  return email.endsWith("@cuadra-test.dev") || (email.startsWith("e2e-") && email.endsWith(`@${COLLAB_DOMAIN}`));
+}
+
 async function cleanup() {
   const { data: users } = await admin.auth.admin.listUsers({ perPage: 1000 });
-  const testUsers = (users?.users || []).filter((u) => u.email?.endsWith("@cuadra-test.dev"));
+  const testUsers = (users?.users || []).filter(isTestUser);
   const ids = testUsers.map((u) => u.id);
   let bizIds = [];
   if (ids.length) {
@@ -114,16 +126,16 @@ check("Perfil owner con business_id", ownerProf?.role === "owner" && !!ownerProf
 const BIZ = ownerProf.business_id;
 
 // 3. Dueño da de alta al encargado de compra vía la ruta real (auth por cookie)
-res = await fetch(`${BASE}/api/create-runner`, {
+res = await fetch(`${BASE}/api/create-collaborator`, {
   method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
-  body: JSON.stringify({ email: RUNNER.email, password: RUNNER.password, name: RUNNER.name }),
+  body: JSON.stringify({ role: "runner", username: RUNNER.username, password: RUNNER.password, name: RUNNER.name }),
 });
-check("POST /api/create-runner (dueño autenticado)", res.ok, `status ${res.status}`);
+check("POST /api/create-collaborator crea un Encargado (dueño autenticado)", res.ok, `status ${res.status}`);
 
-// 4. Login del encargado
+// 4. Login del encargado, con su usuario (sin correo real)
 const runnerSb = createClient(URL_, ANON, { auth: { persistSession: false } });
-const { data: runnerAuth, error: rLoginErr } = await runnerSb.auth.signInWithPassword({ email: RUNNER.email, password: RUNNER.password });
-check("Login encargado de compra", !rLoginErr && !!runnerAuth?.session);
+const { data: runnerAuth, error: rLoginErr } = await runnerSb.auth.signInWithPassword({ email: collabEmail(RUNNER.username), password: RUNNER.password });
+check("Login encargado de compra con usuario (sin correo real)", !rLoginErr && !!runnerAuth?.session);
 const runnerCookie = authCookie(runnerAuth.session);
 
 // 5. RLS: el encargado NO puede crear fundings
@@ -194,7 +206,8 @@ check("IEPS acumulado disponible para el 4º cuadro", Math.abs(iepsTotal - 12) <
 // 13. Aislamiento multi-negocio: otro dueño no ve NADA de este negocio
 await ensureOwner(OWNER2);
 const owner2Sb = createClient(URL_, ANON, { auth: { persistSession: false } });
-await owner2Sb.auth.signInWithPassword({ email: OWNER2.email, password: OWNER2.password });
+const { data: owner2Auth } = await owner2Sb.auth.signInWithPassword({ email: OWNER2.email, password: OWNER2.password });
+const owner2Cookie = authCookie(owner2Auth.session);
 const { data: o2Exps } = await owner2Sb.from("expenses").select("*");
 const { data: o2Funds } = await owner2Sb.from("fundings").select("*");
 check("RLS: otro negocio ve 0 compras y 0 fundings", (o2Exps || []).length === 0 && (o2Funds || []).length === 0);
@@ -297,6 +310,64 @@ check("Corte: el día de hoy solo cuenta sus propias compras", delDia.length ===
 check("Corte: TARJETA de hoy no arrastra la de ayer ($348, no $498)", Math.abs(tarHoy - 348) < 0.001, `tarjeta hoy ${tarHoy}`);
 check("Corte: el día abre con lo que sobró del anterior ($1000 − $600 = $400)", Math.abs(apertura - 400) < 0.001, `apertura ${apertura}`);
 check("Corte: el EFECTIVO sí se conserva de un día a otro (no vuelve a cero)", Math.abs(saldo - 4012.22) < 0.001, `saldo ${saldo}`);
+
+// 19. Colaboradores: Administrador (solo lectura), restablecer contraseña,
+// cambiar rol, y que nadie pueda auto-ascenderse (ni ser ascendido) a dueño.
+res = await fetch(`${BASE}/api/create-collaborator`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ role: "admin", username: ADMIN_COLLAB.username, password: ADMIN_COLLAB.password, name: ADMIN_COLLAB.name }),
+});
+check("POST /api/create-collaborator crea un Administrador", res.ok, `status ${res.status}`);
+
+const adminSb = createClient(URL_, ANON, { auth: { persistSession: false } });
+const { data: adminAuth, error: adminLoginErr } = await adminSb.auth.signInWithPassword({ email: collabEmail(ADMIN_COLLAB.username), password: ADMIN_COLLAB.password });
+check("Login de Administrador con usuario (sin correo real)", !adminLoginErr && !!adminAuth?.session);
+
+const { data: adminExps } = await adminSb.from("expenses").select("*");
+check("Administrador lee los gastos del negocio (vista de solo lectura)", (adminExps || []).length >= 2, `vio ${(adminExps || []).length}`);
+
+const { error: adminFundDenied } = await adminSb.from("fundings").insert({ business_id: BIZ, amount: 100, note: "no debería" });
+check("RLS: Administrador NO puede recargar saldo", !!adminFundDenied);
+
+// Administrador no es "owner", así que la política de actualización ni
+// siquiera lo deja tocar la fila (0 filas afectadas, sin error) — se
+// confirma releyendo que el rol siguió igual.
+await adminSb.from("profiles").update({ role: "owner" }).eq("id", adminAuth.user.id);
+const { data: adminProfAfter } = await admin.from("profiles").select("role").eq("id", adminAuth.user.id).single();
+check("RLS: Administrador no puede auto-ascenderse a dueño", adminProfAfter?.role === "admin", `rol quedó en ${adminProfAfter?.role}`);
+
+// El dueño cambia el rol del Administrador a Caja y de vuelta (misma acción que "Cambiar rol")
+const { data: adminProf } = await ownerSb.from("profiles").select("id").eq("username", ADMIN_COLLAB.username).single();
+const { error: roleChangeErr } = await ownerSb.from("profiles").update({ role: "caja" }).eq("id", adminProf.id);
+check("Dueño cambia el rol de un colaborador (Administrador → Caja)", !roleChangeErr, roleChangeErr?.message);
+
+// Ni el propio dueño puede usar ese mismo camino para hacer dueño a alguien más
+const { error: ownerEscalateErr } = await ownerSb.from("profiles").update({ role: "owner" }).eq("id", adminProf.id);
+check("RLS: ese camino nunca puede dejar a un colaborador como dueño", !!ownerEscalateErr);
+
+// Restablecer contraseña del encargado (ruta real, dueño autenticado)
+const { data: runnerProf } = await ownerSb.from("profiles").select("id").eq("username", RUNNER.username).single();
+const newRunnerPassword = "prueba-e2e-nueva-456";
+res = await fetch(`${BASE}/api/reset-collaborator-password`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ profileId: runnerProf.id, password: newRunnerPassword }),
+});
+check("POST /api/reset-collaborator-password (dueño autenticado)", res.ok, `status ${res.status}`);
+
+const { error: oldPassErr } = await createClient(URL_, ANON, { auth: { persistSession: false } })
+  .auth.signInWithPassword({ email: collabEmail(RUNNER.username), password: RUNNER.password });
+check("La contraseña anterior del encargado ya no sirve", !!oldPassErr);
+
+const { data: newPassAuth, error: newPassErr } = await createClient(URL_, ANON, { auth: { persistSession: false } })
+  .auth.signInWithPassword({ email: collabEmail(RUNNER.username), password: newRunnerPassword });
+check("La contraseña nueva (restablecida) del encargado sí funciona", !newPassErr && !!newPassAuth?.session);
+
+// Un dueño de OTRO negocio no puede restablecer la contraseña de este colaborador
+res = await fetch(`${BASE}/api/reset-collaborator-password`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: owner2Cookie },
+  body: JSON.stringify({ profileId: runnerProf.id, password: "lo-que-sea-123" }),
+});
+check("RLS/endpoint: un dueño ajeno NO puede restablecer la contraseña de este colaborador", res.status === 404, `status ${res.status}`);
 
 // ---------- limpieza ----------
 const removed = await cleanup();

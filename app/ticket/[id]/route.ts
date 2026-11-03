@@ -6,8 +6,8 @@ export const runtime = "nodejs";
 
 /**
  * GET /ticket/:id — enlace permanente a la foto del ticket de un gasto.
- * Es el link que va en el Excel: pide sesión de DUEÑO del negocio y
- * redirige a una signed URL temporal de la foto.
+ * Es el link que va en el Excel: pide sesión de DUEÑO o Administrador del
+ * negocio y redirige a una signed URL temporal de la foto.
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -20,7 +20,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     .select("business_id, role")
     .eq("id", user.id)
     .single();
-  if (!me || me.role !== "owner") {
+  if (!me || !["owner", "admin"].includes(me.role)) {
     return NextResponse.json({ error: "Solo el dueño puede ver las fotos." }, { status: 403 });
   }
 

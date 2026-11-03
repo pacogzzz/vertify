@@ -38,11 +38,14 @@ Variables de `.env.local`:
 Abre el **SQL Editor** de tu proyecto en [supabase.com](https://supabase.com) y corre, en orden:
 
 ```
-supabase/migrations/0001_init.sql     # esquema base, RLS y bucket receipts
-supabase/migrations/0002_vertify.sql  # efectivo/tarjeta, fotos de entrega, alerta $700
+supabase/migrations/0001_init.sql          # esquema base, RLS y bucket receipts
+supabase/migrations/0002_vertify.sql       # efectivo/tarjeta, fotos de entrega, alerta $700
+supabase/migrations/0003_colaboradores.sql # usuario sin correo, roles Chef/Administrador/Caja
 ```
 
 `0002` agrega `payment_method` a las compras, `photo_path` a las entregas de efectivo, el umbral de alerta al negocio, y el bucket privado `cash-photos`. También deja las fotos de tickets **visibles solo para el dueño** (antes el encargado podía verlas).
+
+`0003` agrega la columna `username` a `profiles` (el colaborador entra con usuario, no con correo), amplía los roles permitidos a `chef`, `admin` y `caja`, y dos políticas RLS para que el rol **Administrador** pueda leer (nunca escribir) los gastos y perfiles del negocio, igual que el dueño. Ver la sección 5.2.
 
 ## 3. Verificación por correo al crear cuenta
 
@@ -57,13 +60,13 @@ Todo vive en **Supabase Storage**, en dos buckets **privados**:
 - `receipts/{business_id}/{expense_id}.jpg` — tickets de compra.
 - `cash-photos/{business_id}/{YYYY-MM}/{YYYY-MM-DD}_{id}.jpg` — entregas de efectivo, en carpeta por mes y con la fecha en el nombre.
 
-Solo el dueño puede verlas (RLS + signed URLs de 1 hora generadas en el server). El botón **Ver fotos** abre la galería del rango de fechas elegido, y el Excel incluye una columna **Link de ticket** que apunta a `/ticket/{id}` (pide sesión de dueño y redirige a la foto).
+Solo el dueño y el Administrador (vista de solo lectura, ver 5.2) pueden verlas (RLS + signed URLs de 1 hora generadas en el server). El botón **Ver fotos** abre la galería del rango de fechas elegido, y el Excel incluye una columna **Link de ticket** que apunta a `/ticket/{id}` (pide sesión de dueño o Administrador y redirige a la foto).
 
 > **No usar `upsert: true` al subir.** Con upsert, Storage lee el objeto antes de escribirlo, y desde `0002` el encargado ya no tiene permiso de lectura sobre `receipts`: la subida falla con un 403 de RLS. Las rutas llevan un UUID nuevo cada vez, así que no hay nada que reemplazar. El E2E tiene un check que falla si esto se revierte.
 
 ## 5. Cómo se usa
 
-**Dueño:** crea el negocio en `/registro`, confirma su correo, y desde Ajustes crea la cuenta del **encargado de compra**. Para recargar saldo **es obligatorio tomar la foto entregando el efectivo**. En su panel elige un día o un **rango de fechas** en el calendario, y ve cuatro cuadros (Gastado, Movimientos, IVA, IEPS), el desglose **por tienda**, los movimientos, y los botones **Ver fotos** y **Exportar a Excel**.
+**Dueño:** crea el negocio en `/registro`, confirma su correo, y desde Ajustes crea las cuentas de sus **colaboradores** (ver 5.2: Encargado, Chef, Administrador, Caja). Para recargar saldo **es obligatorio tomar la foto entregando el efectivo**. En su panel elige un día o un **rango de fechas** en el calendario, y ve cuatro cuadros (Gastado, Movimientos, IVA, IEPS), el desglose **por tienda**, los movimientos, y los botones **Ver fotos** y **Exportar a Excel**.
 
 **Encargado de compra:** un solo botón verde **REGISTRAR COMPRA** → elige *Efectivo* o *Tarjeta* → escoge la **tienda** de la lista, anota el **total** y el desglose (**subtotal, IVA, IEPS**) y sube la foto del ticket. El sistema revisa que el ticket se vea bien y, cuando lo aprueba, se habilita **Registrar**. La **fecha la pone la app sola** (se muestra arriba); no hay campo de fecha, categoría ni concepto.
 
@@ -88,14 +91,33 @@ El corte lo dispara el hook `useToday` en `components/CuadraApp.tsx`: programa u
 
 No hay nada que reiniciar en la base de datos: el corte se deriva de `spent_at` al leer, así que el histórico completo se conserva y el dueño lo sigue viendo con el calendario.
 
+## 5.2 Colaboradores: roles, usuario y contraseña (sin correo)
+
+Desde Ajustes, el dueño es el **único** que puede dar de alta colaboradores. Dos botones:
+
+- **Agregar colaborador** → elige el **rol**, el **nombre**, un **usuario** y una **contraseña**, y se los pasa en persona. No pide correo: el colaborador entra con su usuario, no con un email.
+- **Colaboradores** → lista de quien tiene acceso, con dos acciones por persona: **Restablecer contraseña** (el dueño escribe una nueva y se la dicta; no hay recuperación por correo, porque no hay correo real) y **Cambiar rol**.
+
+**Roles:**
+
+| Rol | Qué ve |
+|---|---|
+| **Encargado de compra** | Registrar compra (igual que siempre). |
+| **Administrador** | El mismo panel del dueño (saldo, movimientos, fotos, exportar a Excel), **de solo lectura**: sin recargar saldo ni Ajustes. Pensado para que alguien de confianza esté al tanto del negocio sin operarlo. |
+| **Chef** y **Caja** | La cuenta ya funciona, pero su interfaz todavía no está construida: al entrar ven una pantalla de "tu acceso está listo, la función llega pronto". |
+
+**Cómo entra cada quien:** el dueño sigue usando su **correo** real (con recuperación de contraseña por correo de Supabase). Los colaboradores usan su **usuario**: por dentro se arma un correo sintético (`usuario@vertify.local`, ver `lib/username.ts`) solo para que Supabase Auth tenga un identificador — nunca se le manda nada ahí. El login (`/login`) acepta ambos en el mismo campo.
+
+**Nunca se puede llegar a "Dueño" desde aquí** (ni crear uno, ni que alguien se cambie a sí mismo): solo existe el dueño que se registró en `/registro`. Está reforzado también a nivel de base de datos (política RLS de `0003_colaboradores.sql`), no solo en la pantalla.
+
 ## 6. Aviso de efectivo bajo
 
-Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la app muestra un aviso a **ambos** roles y, si hay SMTP configurado, manda un correo a los dos. Conviene usar el mismo servidor de correo que Supabase. El aviso se manda **una sola vez** y se reinicia solo cuando se recarga por encima del umbral.
+Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la app muestra un aviso al dueño, al encargado y al Administrador (ve el mismo panel). Si hay SMTP configurado, manda un correo a quien tenga una bandeja real — el dueño siempre; los colaboradores usan un correo sintético sin bandeja (ver 5.2), así que se excluyen del envío aunque vean el aviso en pantalla. Conviene usar el mismo servidor de correo que Supabase. El aviso se manda **una sola vez** y se reinicia solo cuando se recarga por encima del umbral.
 
 ## 7. OCR de tickets
 
 - Endpoint server-side `POST /api/read-receipt`; la key **nunca** toca el cliente.
-- Proveedor por defecto: **Gemini** (`@google/genai`, modelo `gemini-2.5-flash`, salida JSON forzada). Las keys nuevas `AQ.` de AI Studio funcionan nativas con este SDK; **no** usar la ruta OpenAI-compatible.
+- Proveedor por defecto: **Gemini** (`@google/genai`, modelo `gemini-3.8-flash` — Google retiró `gemini-2.5-flash` para cuentas nuevas; revisa de vez en cuando en AI Studio qué modelo Flash sigue vigente, o fija otro con `GEMINI_MODEL`. Salida en JSON forzado. Las keys nuevas `AQ.` de AI Studio funcionan nativas con este SDK; **no** usar la ruta OpenAI-compatible.
 - Diseño intercambiable (`lib/ocr.ts`): si Gemini falla por error técnico y hay `ANTHROPIC_API_KEY`, cae a **Claude Haiku** automáticamente.
 - Además de extraer los montos, el OCR es el **filtro de calidad**: si el ticket sale ilegible, no se puede guardar la compra.
 
@@ -106,7 +128,7 @@ npm run dev                                          # en otra terminal
 node --env-file=.env.local scripts/e2e-check.mjs     # E2E contra Supabase real
 ```
 
-Crea usuarios `@cuadra-test.dev`, verifica flujos, RLS, storage, las dos divisiones de dinero y la alerta de $700, y **borra todo** al terminar.
+Crea usuarios `@cuadra-test.dev` (dueños) y `e2e-*@vertify.local` (colaboradores de prueba), verifica flujos, RLS, storage, las dos divisiones de dinero, la alerta de $700, y el alta/cambio de rol/restablecer contraseña de colaboradores (incluyendo que nadie pueda llegar a "Dueño" por ahí) — y **borra todo** al terminar.
 
 Para revisar la interfaz a ojo con datos de muestra:
 
