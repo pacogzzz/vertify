@@ -1,13 +1,20 @@
-# Publica a produccion en Vercel en cada push a main.
-# Usa el token de la cuenta de Vercel del dueno (secret VERCEL_TOKEN),
-# asi cualquier colaborador del repo puede publicar sin ser miembro del
-# equipo de Vercel (el plan Hobby no permite agregar miembros).
+# Publica a produccion cuando un colaborador que NO es el dueno sube
+# cambios a main.
+#
+# Por que existe: el plan Hobby de Vercel solo deja publicar a miembros
+# del equipo. Cuando el dueno hace push, Vercel publica solo y este job
+# no corre. Cuando lo hace alguien mas, Vercel lo bloquea y este job
+# publica en su lugar usando el token del dueno.
+#
+# Importante: aqui NO se compila. Se le manda el codigo a Vercel y Vercel
+# lo compila de su lado, que es donde viven las variables de entorno
+# (Supabase, Gemini, correo). Compilar en GitHub tumbo produccion una vez
+# porque el build salia sin esas llaves.
 name: Deploy a produccion
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 concurrency:
   group: deploy-produccion
@@ -15,6 +22,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.actor != 'pacogzzz'
     runs-on: ubuntu-latest
     env:
       VERCEL_ORG_ID: team_HGk0yMhxwnTm7ltx76I749qq
@@ -22,17 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
       - run: npm install --global vercel@latest
 
-      - name: Baja la configuracion del proyecto
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Compila
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Publica
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Manda el codigo a Vercel y publica
+        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
