@@ -117,7 +117,7 @@ Cuando el efectivo baja de **$700** (`low_cash_threshold` en `businesses`), la a
 ## 7. OCR de tickets
 
 - Endpoint server-side `POST /api/read-receipt`; la key **nunca** toca el cliente.
-- Proveedor por defecto: **Gemini** (`@google/genai`, modelo `gemini-2.5-flash`, salida JSON forzada). Las keys nuevas `AQ.` de AI Studio funcionan nativas con este SDK; **no** usar la ruta OpenAI-compatible.
+- Proveedor por defecto: **Gemini** (`@google/genai`, modelo `gemini-3.8-flash` — Google retiró `gemini-2.5-flash` para cuentas nuevas; revisa de vez en cuando en AI Studio qué modelo Flash sigue vigente, o fija otro con `GEMINI_MODEL`. Salida en JSON forzado. Las keys nuevas `AQ.` de AI Studio funcionan nativas con este SDK; **no** usar la ruta OpenAI-compatible.
 - Diseño intercambiable (`lib/ocr.ts`): si Gemini falla por error técnico y hay `ANTHROPIC_API_KEY`, cae a **Claude Haiku** automáticamente.
 - Además de extraer los montos, el OCR es el **filtro de calidad**: si el ticket sale ilegible, no se puede guardar la compra.
 

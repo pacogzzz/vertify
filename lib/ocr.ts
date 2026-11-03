@@ -26,7 +26,7 @@ async function readWithGemini(imageBase64: string): Promise<ReceiptData> {
   // SDK oficial @google/genai — NO usar la ruta OpenAI-compatible (las keys AQ. fallan ahí)
   const ai = new GoogleGenAI({ apiKey });
   const r = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
     contents: [
       { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
       { text: RECEIPT_PROMPT },
