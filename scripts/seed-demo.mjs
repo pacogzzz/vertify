@@ -48,7 +48,7 @@ const { data: biz } = await admin.from("businesses").insert({ name: OWNER.biz })
 await admin.from("profiles").insert({ id: o.user.id, business_id: biz.id, name: OWNER.name, role: "owner" });
 
 const { data: r } = await admin.auth.admin.createUser({ email: RUNNER.email, password: RUNNER.password, email_confirm: true });
-await admin.from("profiles").insert({ id: r.user.id, business_id: biz.id, name: RUNNER.name, role: "runner" });
+await admin.from("profiles").insert({ id: r.user.id, business_id: biz.id, name: RUNNER.name, role: "runner", username: "ruben-demo" });
 
 const jpeg = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==", "base64");
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

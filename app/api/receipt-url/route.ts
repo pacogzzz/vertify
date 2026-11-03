@@ -7,7 +7,8 @@ export const runtime = "nodejs";
 /**
  * GET /api/receipt-url?path=businessId/... [&bucket=receipts|cash-photos]
  * Devuelve una signed URL temporal de una foto (ticket o entrega de
- * efectivo). SOLO el dueño del negocio puede ver fotos.
+ * efectivo). Solo el dueño y el Administrador (vista de solo lectura)
+ * pueden ver fotos.
  */
 export async function GET(req: Request) {
   const supabase = await supabaseServer();
@@ -26,7 +27,7 @@ export async function GET(req: Request) {
     .select("business_id, role")
     .eq("id", user.id)
     .single();
-  if (!me || me.role !== "owner" || !path.startsWith(`${me.business_id}/`)) {
+  if (!me || !["owner", "admin"].includes(me.role) || !path.startsWith(`${me.business_id}/`)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

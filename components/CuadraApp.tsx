@@ -5,11 +5,13 @@ import {
   Camera, Wallet, Plus, Download, Settings, Check, X,
   ChevronDown, ChevronRight, ChevronLeft, Receipt, Store, AlertTriangle,
   Loader2, Image as ImageIcon, Banknote, LogOut, UserPlus, CreditCard,
-  CalendarDays, PencilLine,
+  CalendarDays, PencilLine, ChefHat, ShieldCheck, Users, KeyRound, Clock,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { TIENDAS } from "@/lib/stores";
-import type { Business, Profile, ExpenseRow, FundingRow, ExpenseItem, ReceiptData } from "@/lib/types";
+import { COLLAB_ROLES, roleLabel } from "@/lib/roles";
+import { normalizeUsername, isValidUsername } from "@/lib/username";
+import type { Business, Profile, Role, ExpenseRow, FundingRow, ExpenseItem, ReceiptData } from "@/lib/types";
 
 /* ============================================================
    Vertify — v2 del port de producción (antes Cuadra).
@@ -235,15 +237,21 @@ function revisarMontos(m: Montos, ocr: ReceiptData | null) {
 /* ============================================================
    App
    ============================================================ */
-type ModalKind = "paymethod" | "compra" | "recarga" | "settings" | "runner" | "fotos" | null;
+type ModalKind = "paymethod" | "compra" | "recarga" | "settings" | "addCollaborator" | "collaborators" | "fotos" | null;
 
 export default function CuadraApp({ profile, business }: { profile: Profile; business: Business }) {
   const sb = supabaseBrowser();
   const isOwner = profile.role === "owner";
+  const isAdmin = profile.role === "admin";
+  const isRunner = profile.role === "runner";
+  /* Administrador ve el mismo panel que el dueño, pero de solo lectura
+     (sin recargar saldo ni ajustes). Chef y Caja todavía no tienen
+     interfaz propia: se atienden aparte, más abajo. */
+  const canViewDashboard = isOwner || isAdmin;
 
   const [loaded, setLoaded] = useState(false);
   const [biz, setBiz] = useState<Business>(business);
-  const [runner, setRunner] = useState<Profile | null>(null);
+  const [runners, setRunners] = useState<Profile[]>([]);
   const [fundings, setFundings] = useState<UIFunding[]>([]);
   const [expenses, setExpenses] = useState<UIExpense[]>([]);
   const [modal, setModal] = useState<ModalKind>(null);
@@ -261,9 +269,9 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
     ]);
     setFundings(((fRes.data as FundingRow[]) || []).map(fundingToUI));
     setExpenses(((eRes.data as ExpenseRow[]) || []).map(rowToUI));
-    if (isOwner) {
-      const { data: r } = await sb.from("profiles").select("id, business_id, name, role").eq("role", "runner").limit(1);
-      setRunner((r && (r[0] as Profile)) || null);
+    if (canViewDashboard) {
+      const { data: r } = await sb.from("profiles").select("id, business_id, name, role, username").eq("role", "runner");
+      setRunners((r as Profile[]) || []);
     }
     setLoaded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,7 +292,11 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
   const lowCash = cashBalance <= threshold;
   const corte = calcCorte(hoy, expenses, fundings, cashBalance);
   const todays = expenses.filter((e) => e.dateISO === hoy).sort((a, b) => b.createdAt - a.createdAt);
-  const runnerName = isOwner ? (runner?.name || "tu encargado de compra") : profile.name;
+  const runnerName = !canViewDashboard
+    ? profile.name
+    : runners.length === 1 ? runners[0].name
+      : runners.length === 0 ? "tu encargado de compra"
+        : "tus encargados de compra";
 
   /* ----- aviso servidor: revisa umbral y manda correos una sola vez ----- */
   const pingLowBalance = () => { fetch("/api/low-balance", { method: "POST" }).catch(() => {}); };
@@ -355,7 +367,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
   }
 
   /* ----- recarga con foto obligatoria ----- */
-  async function saveFunding(amount: string, note: string, photoB64: string): Promise<string> {
+  async function saveFunding(amount: string, note: string, photoB64: string, runnerId: string | null): Promise<string> {
     if (!photoB64) return "Toma la foto entregando el efectivo para poder recargar.";
     const id = crypto.randomUUID();
     const iso = todayISO();
@@ -363,7 +375,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
     const { error: upErr } = await sb.storage.from("cash-photos").upload(path, b64ToBlob(photoB64), { contentType: "image/jpeg" });
     if (upErr) return `No se pudo subir la foto: ${upErr.message}`;
 
-    const row = { id, business_id: biz.id, runner_id: runner?.id ?? null, amount: num(amount), note: note || "Recarga", photo_path: path };
+    const row = { id, business_id: biz.id, runner_id: runnerId ?? runners[0]?.id ?? null, amount: num(amount), note: note || "Recarga", photo_path: path };
     const { data: saved, error } = await sb.from("fundings").insert(row).select().single();
     if (error || !saved) return "No se pudo recargar. Revisa tu conexión.";
     setFundings([fundingToUI(saved as FundingRow), ...fundings]);
@@ -372,13 +384,9 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
     return "";
   }
 
-  async function saveConfig(cfg: { businessName: string; runnerName: string; dailyFloat: number }) {
+  async function saveConfig(cfg: { businessName: string; dailyFloat: number }) {
     const { error } = await sb.from("businesses").update({ name: cfg.businessName, daily_float: cfg.dailyFloat }).eq("id", biz.id);
     if (error) { flash("No se pudo guardar. Revisa tu conexión."); return; }
-    if (runner && cfg.runnerName && cfg.runnerName !== runner.name) {
-      await sb.from("profiles").update({ name: cfg.runnerName }).eq("id", runner.id);
-      setRunner({ ...runner, name: cfg.runnerName });
-    }
     setBiz({ ...biz, name: cfg.businessName, daily_float: cfg.dailyFloat });
     setModal(null); flash("Ajustes guardados");
   }
@@ -398,6 +406,13 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
     );
   }
 
+  /* Chef y Caja: el rol ya existe y su cuenta funciona, pero su interfaz
+     todavía no está construida. Cada una es su propia pantalla (no una
+     vista compartida) para poder trabajarlas por separado más adelante;
+     hoy solo comparten el tipo de mensaje. */
+  if (profile.role === "chef") return <ChefPlaceholder name={profile.name} onLogout={logout} />;
+  if (profile.role === "caja") return <CajaPlaceholder name={profile.name} onLogout={logout} />;
+
   return (
     <div className="cuadra">
       <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onTicketFile} />
@@ -413,7 +428,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
             </div>
           </div>
           <div className="topbar-right">
-            <div className="rolechip">{isOwner ? <><Store size={15} />Dueño</> : <><Wallet size={15} />Encargado</>}</div>
+            <div className="rolechip">{isOwner ? <><Store size={15} />Dueño</> : isAdmin ? <><ShieldCheck size={15} />Administrador</> : <><Wallet size={15} />Encargado</>}</div>
             <button className="iconbtn" title="Ajustes" onClick={() => setModal("settings")}><Settings size={17} /></button>
           </div>
         </header>
@@ -424,15 +439,15 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
         {lowCash && (
           <div className="banner-warn" style={{ marginTop: 10 }}>
             <AlertTriangle size={15} />
-            {isOwner
+            {canViewDashboard
               ? `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Prepara la siguiente entrega.`
               : `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Pídele más dinero a tu superior.`}
           </div>
         )}
 
-        {!isOwner
+        {!canViewDashboard
           ? <Encargado runnerName={runnerName} cashBalance={cashBalance} corte={corte} todays={todays} onCompra={startCompra} />
-          : <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />}
+          : <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} readOnly={!isOwner} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />}
       </div>
 
       {/* modals */}
@@ -464,7 +479,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
 
       {modal === "recarga" && (
         <Sheet title="Recargar saldo" onClose={() => setModal(null)}>
-          <RecargaForm defaultAmount={num(biz.daily_float)} runnerName={runnerName} onSave={saveFunding} onCancel={() => setModal(null)} />
+          <RecargaForm defaultAmount={num(biz.daily_float)} runnerName={runnerName} runners={runners} onSave={saveFunding} onCancel={() => setModal(null)} />
         </Sheet>
       )}
 
@@ -477,7 +492,15 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
       {modal === "settings" && (
         <Sheet title="Ajustes" onClose={() => setModal(null)}>
           {isOwner
-            ? <SettingsForm biz={biz} runner={runner} onSave={saveConfig} onCreateRunner={() => setModal("runner")} onLogout={logout} />
+            ? (
+              <SettingsForm
+                biz={biz}
+                onSave={saveConfig}
+                onAddCollaborator={() => setModal("addCollaborator")}
+                onOpenCollaborators={() => setModal("collaborators")}
+                onLogout={logout}
+              />
+            )
             : (
               <div>
                 <p className="hint" style={{ fontSize: 14, marginBottom: 16 }}>Sesión de {profile.name}. Si necesitas cambiar algo de tu cuenta, pídeselo a tu superior.</p>
@@ -487,16 +510,24 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
         </Sheet>
       )}
 
-      {modal === "runner" && (
-        <Sheet title="Cuenta del encargado de compra" onClose={() => setModal("settings")}>
-          <RunnerForm
+      {modal === "addCollaborator" && (
+        <Sheet title="Agregar colaborador" onClose={() => setModal("settings")}>
+          <AddCollaboratorForm
             onDone={async () => {
-              const { data: r } = await sb.from("profiles").select("id, business_id, name, role").eq("role", "runner").limit(1);
-              setRunner((r && (r[0] as Profile)) || null);
-              setModal(null); flash("Cuenta del encargado creada");
+              await load(); // por si el nuevo colaborador es Encargado
+              setModal(null); flash("Cuenta creada");
             }}
             onCancel={() => setModal("settings")}
           />
+        </Sheet>
+      )}
+
+      {modal === "collaborators" && (
+        <Sheet
+          title="Colaboradores"
+          onClose={async () => { setModal("settings"); await load(); }} // por si cambió algún rol
+        >
+          <CollaboratorsList bizId={biz.id} flash={flash} />
         </Sheet>
       )}
 
@@ -584,9 +615,9 @@ function Encargado({ runnerName, cashBalance, corte, todays, onCompra }: {
 /* ============================================================
    Vista del dueño: calendario + 4 cuadros + tiendas + fotos
    ============================================================ */
-function Dueno({ biz, hoy, cashBalance, corte, expenses, onRecarga, onFotos }: {
+function Dueno({ biz, hoy, cashBalance, corte, expenses, readOnly, onRecarga, onFotos }: {
   biz: Business; hoy: string; cashBalance: number; corte: Corte;
-  expenses: UIExpense[]; onRecarga: () => void; onFotos: (sel: DateSel | null) => void;
+  expenses: UIExpense[]; readOnly?: boolean; onRecarga: () => void; onFotos: (sel: DateSel | null) => void;
 }) {
   const [sel, setSel] = useState<DateSel | null>({ start: hoy, end: hoy });
   const [showCal, setShowCal] = useState(false);
@@ -635,7 +666,7 @@ function Dueno({ biz, hoy, cashBalance, corte, expenses, onRecarga, onFotos }: {
   return (
     <>
       <DuoBalance title="Dinero en manos de tu encargado de compra · ahora mismo" cashBalance={cashBalance} corte={corte} tu={false}>
-        <button className="btn btn-onwhite" style={{ marginTop: 16 }} onClick={onRecarga}><Plus size={16} />Recargar saldo</button>
+        {!readOnly && <button className="btn btn-onwhite" style={{ marginTop: 16 }} onClick={onRecarga}><Plus size={16} />Recargar saldo</button>}
       </DuoBalance>
 
       <div className="owner-bar">
@@ -1008,12 +1039,13 @@ function CompraForm({ ticket, onPickPhoto, onSave, onCancel }: {
 }
 
 /* ---------- recarga con foto obligatoria de la entrega ---------- */
-function RecargaForm({ defaultAmount, runnerName, onSave, onCancel }: {
-  defaultAmount: number; runnerName: string;
-  onSave: (a: string, n: string, photoB64: string) => Promise<string>; onCancel: () => void;
+function RecargaForm({ defaultAmount, runnerName, runners, onSave, onCancel }: {
+  defaultAmount: number; runnerName: string; runners: Profile[];
+  onSave: (a: string, n: string, photoB64: string, runnerId: string | null) => Promise<string>; onCancel: () => void;
 }) {
   const [amount, setAmount] = useState(String(defaultAmount));
   const [note, setNote] = useState("");
+  const [runnerId, setRunnerId] = useState<string>(runners[0]?.id || "");
   const [thumb, setThumb] = useState<string | null>(null);
   const [photoB64, setPhotoB64] = useState("");
   const [err, setErr] = useState("");
@@ -1038,7 +1070,7 @@ function RecargaForm({ defaultAmount, runnerName, onSave, onCancel }: {
     if (num(amount) <= 0) return setErr("Pon la cantidad que estás entregando.");
     if (!photoB64) return setErr("Toma la foto entregando el efectivo. Es obligatoria.");
     setErr(""); setSaving(true);
-    const failMsg = await onSave(amount, note, photoB64);
+    const failMsg = await onSave(amount, note, photoB64, runnerId || null);
     setSaving(false);
     if (failMsg) setErr(failMsg);
   }
@@ -1047,9 +1079,20 @@ function RecargaForm({ defaultAmount, runnerName, onSave, onCancel }: {
     <div>
       <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
       <p className="hint" style={{ fontSize: 14, marginBottom: 14 }}>
-        Agrega dinero al saldo de {runnerName}. Para protegerte de malentendidos, la foto
-        entregando el efectivo es obligatoria y queda guardada con la fecha de hoy.
+        {runners.length > 1
+          ? "Agrega dinero al fondo del negocio. Elige a quién se le entrega."
+          : `Agrega dinero al saldo de ${runnerName}.`}{" "}
+        Para protegerte de malentendidos, la foto entregando el efectivo es obligatoria y
+        queda guardada con la fecha de hoy.
       </p>
+      {runners.length > 1 && (
+        <div className="field">
+          <label className="label">¿A quién se le entrega?</label>
+          <select className="input" value={runnerId} onChange={(e) => setRunnerId(e.target.value)}>
+            {runners.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </div>
+      )}
       <div className="field"><label className="label">Cantidad</label><input className="input" value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" /></div>
       <div className="field"><label className="label">Nota (opcional)</label><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Fondo del día, compra grande…" /></div>
 
@@ -1082,51 +1125,51 @@ function RecargaForm({ defaultAmount, runnerName, onSave, onCancel }: {
 }
 
 /* ---------- settings form ---------- */
-function SettingsForm({ biz, runner, onSave, onCreateRunner, onLogout }: {
-  biz: Business; runner: Profile | null;
-  onSave: (c: { businessName: string; runnerName: string; dailyFloat: number }) => void | Promise<void>;
-  onCreateRunner: () => void; onLogout: () => void;
+function SettingsForm({ biz, onSave, onAddCollaborator, onOpenCollaborators, onLogout }: {
+  biz: Business;
+  onSave: (c: { businessName: string; dailyFloat: number }) => void | Promise<void>;
+  onAddCollaborator: () => void; onOpenCollaborators: () => void; onLogout: () => void;
 }) {
   const [businessName, setBn] = useState(biz.name);
-  const [runnerName, setRn] = useState(runner?.name || "");
   const [dailyFloat, setDf] = useState(String(num(biz.daily_float)));
   return (
     <div>
       <div className="field"><label className="label">Nombre del negocio</label><input className="input" value={businessName} onChange={(e) => setBn(e.target.value)} /></div>
-      {runner
-        ? <div className="field"><label className="label">Nombre del encargado de compra</label><input className="input" value={runnerName} onChange={(e) => setRn(e.target.value)} /></div>
-        : (
-          <div className="field">
-            <label className="label">Encargado de compra</label>
-            <button className="btn btn-ghost btn-block" onClick={onCreateRunner}><UserPlus size={16} />Crear cuenta del encargado</button>
-            <div className="hint" style={{ marginTop: 6 }}>Tú le creas su acceso y le pasas las claves en persona.</div>
-          </div>
-        )}
       <div className="field"><label className="label">Fondo diario sugerido</label><input className="input" value={dailyFloat} onChange={(e) => setDf(e.target.value)} inputMode="decimal" /><div className="hint">Es el monto que aparece por defecto al recargar.</div></div>
-      <button className="btn btn-primary btn-block" style={{ marginTop: 6 }} onClick={() => onSave({ businessName: businessName.trim() || "Mi Restaurante", runnerName: runnerName.trim(), dailyFloat: num(dailyFloat) || 2000 })}><Check size={17} />Guardar ajustes</button>
+      <button className="btn btn-primary btn-block" style={{ marginTop: 6 }} onClick={() => onSave({ businessName: businessName.trim() || "Mi Restaurante", dailyFloat: num(dailyFloat) || 2000 })}><Check size={17} />Guardar ajustes</button>
+
+      <div className="field" style={{ marginTop: 18 }}>
+        <label className="label">Colaboradores</label>
+        <button className="btn btn-ghost btn-block" onClick={onAddCollaborator}><UserPlus size={16} />Agregar colaborador</button>
+        <button className="btn btn-ghost btn-block" style={{ marginTop: 8 }} onClick={onOpenCollaborators}><Users size={16} />Colaboradores</button>
+        <div className="hint" style={{ marginTop: 6 }}>Tú creas el acceso y les pasas el usuario y la contraseña en persona. Sin correo.</div>
+      </div>
+
       <button className="btn btn-ghost btn-block" style={{ marginTop: 10 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
     </div>
   );
 }
 
-/* ---------- alta del encargado de compra ---------- */
-function RunnerForm({ onDone, onCancel }: { onDone: () => void | Promise<void>; onCancel: () => void }) {
+/* ---------- alta de un colaborador: rol, nombre, usuario, contraseña ---------- */
+function AddCollaboratorForm({ onDone, onCancel }: { onDone: () => void | Promise<void>; onCancel: () => void }) {
+  const [role, setRole] = useState<Role>("runner");
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function submit() {
-    if (!name.trim()) return setErr("Escribe el nombre del encargado.");
-    if (!email.trim().includes("@")) return setErr("Escribe un correo válido.");
+    if (!name.trim()) return setErr("Escribe el nombre del colaborador.");
+    const user = normalizeUsername(username);
+    if (!isValidUsername(user)) return setErr("Escribe un usuario válido: 3 a 20 letras, números, puntos o guiones.");
     if (password.length < 8) return setErr("La contraseña debe tener al menos 8 caracteres.");
     setErr(""); setSaving(true);
     try {
-      const res = await fetch("/api/create-runner", {
+      const res = await fetch("/api/create-collaborator", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), password }),
+        body: JSON.stringify({ role, name: name.trim(), username: user, password }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(data.error || "No se pudo crear la cuenta."); setSaving(false); return; }
@@ -1139,14 +1182,188 @@ function RunnerForm({ onDone, onCancel }: { onDone: () => void | Promise<void>; 
 
   return (
     <div>
-      <p className="hint" style={{ fontSize: 14, marginBottom: 14 }}>Crea el acceso de tu encargado de compra y pásale el correo y la contraseña en persona. Él entra una vez en su teléfono y su sesión queda guardada.</p>
+      <p className="hint" style={{ fontSize: 14, marginBottom: 14 }}>Elige el rol, ponle nombre, usuario y contraseña, y pásaselos en persona. Entra una vez en su teléfono y su sesión queda guardada. Sin correo.</p>
+      <div className="field">
+        <label className="label">Rol</label>
+        <select className="input" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+          {COLLAB_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+        </select>
+      </div>
       <div className="field"><label className="label">Nombre</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Rubén" /></div>
-      <div className="field"><label className="label">Correo</label><input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="encargado@tunegocio.com" /></div>
+      <div className="field"><label className="label">Usuario</label><input className="input" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="ruben" /><div className="hint" style={{ marginTop: 4 }}>Sin espacios ni acentos. Con esto entra, no con un correo.</div></div>
       <div className="field"><label className="label">Contraseña</label><input className="input" type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Mínimo 8 caracteres" /></div>
       {err && <div className="err"><AlertTriangle size={14} />{err}</div>}
       <div className="row2" style={{ marginTop: 14 }}>
         <button className="btn btn-ghost btn-block" onClick={onCancel} disabled={saving}>Cancelar</button>
         <button className="btn btn-primary btn-block" onClick={submit} disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : <UserPlus size={17} />}Crear cuenta</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- lista de colaboradores: restablecer contraseña y cambiar rol ---------- */
+function CollaboratorsList({ bizId, flash }: { bizId: string; flash: (msg: string) => void }) {
+  const sb = supabaseBrowser();
+  const [list, setList] = useState<Profile[] | null>(null);
+  const [loadErr, setLoadErr] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await sb
+        .from("profiles")
+        .select("id, business_id, name, role, username")
+        .eq("business_id", bizId)
+        .neq("role", "owner")
+        .order("name");
+      if (error) setLoadErr("No se pudo cargar la lista. Revisa tu conexión.");
+      setList((data as Profile[]) || []);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (loadErr) return <div className="err"><AlertTriangle size={14} />{loadErr}</div>;
+  if (list === null) return <div style={{ display: "flex", justifyContent: "center", padding: 20 }}><Loader2 className="spin" size={20} /></div>;
+  if (list.length === 0) return <div className="hint" style={{ padding: "4px 4px 10px" }}>Todavía no has agregado a nadie. Usa "Agregar colaborador".</div>;
+
+  return (
+    <div>
+      {list.map((c) => (
+        <CollaboratorRow
+          key={c.id}
+          collaborator={c}
+          flash={flash}
+          onRoleChanged={(newRole) => setList((l) => (l || []).map((x) => (x.id === c.id ? { ...x, role: newRole } : x)))}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CollaboratorRow({ collaborator, flash, onRoleChanged }: {
+  collaborator: Profile; flash: (msg: string) => void; onRoleChanged: (role: Role) => void;
+}) {
+  const sb = supabaseBrowser();
+  const [changing, setChanging] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+
+  async function changeRole(newRole: string) {
+    setChanging(true);
+    const { error } = await sb.from("profiles").update({ role: newRole }).eq("id", collaborator.id);
+    setChanging(false);
+    if (error) { flash("No se pudo cambiar el rol."); return; }
+    onRoleChanged(newRole as Role);
+    flash(`Ahora es ${roleLabel(newRole)}`);
+  }
+
+  return (
+    <div className="card" style={{ padding: "12px 14px", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <div>
+          <div style={{ fontWeight: 600 }}>{collaborator.name}</div>
+          <div className="hint">@{collaborator.username || "—"}</div>
+        </div>
+        <select
+          className="input" style={{ width: "auto" }}
+          value={collaborator.role} disabled={changing}
+          onChange={(e) => changeRole(e.target.value)}
+        >
+          {COLLAB_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+        </select>
+      </div>
+      {!resetOpen
+        ? <button className="btn btn-ghost btn-block" style={{ marginTop: 10 }} onClick={() => setResetOpen(true)}><KeyRound size={15} />Restablecer contraseña</button>
+        : (
+          <ResetPasswordInline
+            profileId={collaborator.id}
+            onDone={() => { setResetOpen(false); flash("Contraseña actualizada"); }}
+            onCancel={() => setResetOpen(false)}
+          />
+        )}
+    </div>
+  );
+}
+
+function ResetPasswordInline({ profileId, onDone, onCancel }: {
+  profileId: string; onDone: () => void; onCancel: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit() {
+    if (password.length < 8) return setErr("La contraseña debe tener al menos 8 caracteres.");
+    setErr(""); setSaving(true);
+    try {
+      const res = await fetch("/api/reset-collaborator-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profileId, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data.error || "No se pudo cambiar la contraseña."); setSaving(false); return; }
+      onDone();
+    } catch {
+      setErr("No se pudo cambiar la contraseña. Revisa tu conexión.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <input className="input" type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Contraseña nueva (mínimo 8)" />
+      {err && <div className="err"><AlertTriangle size={14} />{err}</div>}
+      <div className="row2" style={{ marginTop: 8 }}>
+        <button className="btn btn-ghost btn-block" onClick={onCancel} disabled={saving}>Cancelar</button>
+        <button className="btn btn-primary btn-block" onClick={submit} disabled={saving}>{saving ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Guardar</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Chef y Caja: cuenta lista, interfaz propia pendiente ---------- */
+function ChefPlaceholder({ name, onLogout }: { name: string; onLogout: () => void }) {
+  return (
+    <div className="cuadra" style={{ minHeight: "100vh" }}>
+      <div className="wrap">
+        <header className="topbar">
+          <div className="brand">
+            <div className="brand-mark">$</div>
+            <div><div className="brand-name">Vertify</div><div className="brand-sub">Chef</div></div>
+          </div>
+          <div className="topbar-right">
+            <div className="rolechip"><ChefHat size={15} />Chef</div>
+          </div>
+        </header>
+        <div className="card" style={{ marginTop: 40, padding: "32px 20px", textAlign: "center" }}>
+          <ChefHat size={30} style={{ opacity: 0.5, marginBottom: 10 }} />
+          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>Hola, {name}</div>
+          <div className="hint">Tu acceso como Chef ya está listo. Pronto vas a tener aquí tu propia pantalla.</div>
+        </div>
+        <button className="btn btn-ghost btn-block" style={{ marginTop: 16 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
+      </div>
+    </div>
+  );
+}
+
+function CajaPlaceholder({ name, onLogout }: { name: string; onLogout: () => void }) {
+  return (
+    <div className="cuadra" style={{ minHeight: "100vh" }}>
+      <div className="wrap">
+        <header className="topbar">
+          <div className="brand">
+            <div className="brand-mark">$</div>
+            <div><div className="brand-name">Vertify</div><div className="brand-sub">Caja</div></div>
+          </div>
+          <div className="topbar-right">
+            <div className="rolechip"><Banknote size={15} />Caja</div>
+          </div>
+        </header>
+        <div className="card" style={{ marginTop: 40, padding: "32px 20px", textAlign: "center" }}>
+          <Clock size={30} style={{ opacity: 0.5, marginBottom: 10 }} />
+          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>Hola, {name}</div>
+          <div className="hint">Tu acceso como Caja ya está listo. Pronto vas a tener aquí tu propia pantalla.</div>
+        </div>
+        <button className="btn btn-ghost btn-block" style={{ marginTop: 16 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
       </div>
     </div>
   );

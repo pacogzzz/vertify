@@ -1,4 +1,4 @@
-export type Role = "owner" | "runner";
+export type Role = "owner" | "runner" | "chef" | "admin" | "caja";
 
 export interface Business {
   id: string;
@@ -13,6 +13,8 @@ export interface Profile {
   business_id: string;
   name: string;
   role: Role;
+  /** Solo colaboradores (no el dueño): el usuario con el que entran, sin correo real. */
+  username?: string | null;
 }
 
 export interface ExpenseItem {

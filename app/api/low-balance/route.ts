@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { sendLowCashEmail } from "@/lib/email";
+import { isCollabEmail } from "@/lib/username";
 
 export const runtime = "nodejs";
 
@@ -42,12 +43,15 @@ export async function POST() {
   if (balance <= threshold && !biz.low_cash_alerted) {
     await admin.from("businesses").update({ low_cash_alerted: true }).eq("id", bizId);
 
-    // correos del dueño y del encargado (viven en auth.users)
+    // Correo de quien tenga una bandeja real: el dueño siempre, y los
+    // colaboradores que la tengan. Los colaboradores usan un correo
+    // sintético (usuario sin @) solo para Auth, así que se excluyen: no
+    // existen como bandeja y el envío fallaría.
     const { data: profs } = await admin.from("profiles").select("id").eq("business_id", bizId);
     const emails: string[] = [];
     for (const p of profs || []) {
       const { data: u } = await admin.auth.admin.getUserById(p.id);
-      if (u?.user?.email) emails.push(u.user.email);
+      if (u?.user?.email && !isCollabEmail(u.user.email)) emails.push(u.user.email);
     }
     const sent = await sendLowCashEmail({ to: emails, businessName: biz.name, balance, threshold });
     return NextResponse.json({ alert: true, balance, emailed: sent });
