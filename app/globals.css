@@ -15,9 +15,16 @@ html, body { margin: 0; padding: 0; background: #EEF1EC; }
   -webkit-font-smoothing:antialiased;
 }
 .cuadra *{box-sizing:border-box;}
-.cuadra .wrap{max-width:680px;margin:0 auto;padding:0 16px 110px;}
+.cuadra .wrap{max-width:680px;margin:0 auto;padding:0 16px calc(110px + env(safe-area-inset-bottom));}
 
-.cuadra .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 2px 14px;flex-wrap:wrap;}
+/* Fija en pantalla (no se va con el scroll) y respeta el notch/barra de
+   estado del teléfono: si no, en un iPhone en modo PWA el botón de
+   Ajustes queda tapado o se puede perder al desplazar la pantalla. */
+.cuadra .topbar{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  position:sticky;top:0;z-index:40;background:var(--paper);
+  margin:0 -16px;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;
+}
 .cuadra .brand{display:flex;align-items:center;gap:11px;}
 .cuadra .brand-mark{width:40px;height:40px;border-radius:12px;background:linear-gradient(155deg,#27B06E,#0F5C39);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:700;font-size:22px;box-shadow:0 4px 14px rgba(15,92,57,.25);}
 .cuadra .brand-name{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:-.02em;line-height:1;}
