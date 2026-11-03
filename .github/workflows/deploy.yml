@@ -1,0 +1,38 @@
+# Publica a produccion en Vercel en cada push a main.
+# Usa el token de la cuenta de Vercel del dueno (secret VERCEL_TOKEN),
+# asi cualquier colaborador del repo puede publicar sin ser miembro del
+# equipo de Vercel (el plan Hobby no permite agregar miembros).
+name: Deploy a produccion
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-produccion
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: team_HGk0yMhxwnTm7ltx76I749qq
+      VERCEL_PROJECT_ID: prj_TMdhu41iUmeCO4lErgar49tmC9cD
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm install --global vercel@latest
+
+      - name: Baja la configuracion del proyecto
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Compila
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Publica
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
