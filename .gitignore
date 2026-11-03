@@ -12,3 +12,6 @@ next-env.d.ts
 
 # documentos personales
 *.docx
+
+# documentos de trabajo, no van al repo
+*.pdf
