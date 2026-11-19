@@ -413,10 +413,12 @@ check("Login de Chef con usuario (sin correo real)", !chefLoginErr && !!chefAuth
 const admin2Sb = createClient(URL_, ANON, { auth: { persistSession: false } });
 const { data: admin2Auth } = await admin2Sb.auth.signInWithPassword({ email: collabEmail(ADMIN2_COLLAB.username), password: ADMIN2_COLLAB.password });
 
-// Dos insumos de prueba: uno con precio, otro sin precio (Rubén lo va a proponer)
+// Dos insumos de prueba: uno con precio, otro sin precio (Rubén lo va a proponer).
+// E2E Rib Eye trae nivel_max=5 a propósito: el pedido de más abajo (10) lo deja
+// en "posible exceso" (Fase 2).
 const { data: insumoConPrecio } = await admin
   .from("insumos")
-  .insert({ business_id: BIZ, categoria: "Carnes", nombre: "E2E Rib Eye", unidad: "KG", precio: 300 })
+  .insert({ business_id: BIZ, categoria: "Carnes", nombre: "E2E Rib Eye", unidad: "KG", precio: 300, nivel_max: 5 })
   .select().single();
 const { data: insumoSinPrecio } = await admin
   .from("insumos")
@@ -424,11 +426,13 @@ const { data: insumoSinPrecio } = await admin
   .select().single();
 check("Insumos de prueba creados", !!insumoConPrecio && !!insumoSinPrecio);
 
-// El Chef ve el catálogo SIN precio, vía la función de servidor
+// El Chef ve el catálogo SIN precio, vía la función de servidor (sí con nivel_max: no es dinero, lo usa la alerta de exceso)
 const { data: catalogoChef, error: catalogoChefErr } = await chefSb.rpc("insumos_para_chef");
 const chefVeAmbos = (catalogoChef || []).some((i) => i.id === insumoConPrecio.id) && (catalogoChef || []).some((i) => i.id === insumoSinPrecio.id);
 check("Chef ve el catálogo vía insumos_para_chef()", !catalogoChefErr && chefVeAmbos);
 check("insumos_para_chef() NUNCA manda el precio", (catalogoChef || []).every((i) => !("precio" in i)));
+const ribEyeChef = (catalogoChef || []).find((i) => i.id === insumoConPrecio.id);
+check("insumos_para_chef() SÍ manda nivel_max (para la alerta de exceso)", ribEyeChef?.nivel_max === 5, `nivel_max ${ribEyeChef?.nivel_max}`);
 
 // RLS: el Chef no puede leer la tabla insumos directo (ahí sí vive el precio)
 const { data: insumosDirecto } = await chefSb.from("insumos").select("*");
@@ -451,6 +455,22 @@ const { data: itemsInsertados, error: itemsErr } = await chefSb.from("lista_comp
 ]).select();
 check("Chef sube los 2 insumos de su pedido", !itemsErr && (itemsInsertados || []).length === 2, itemsErr?.message);
 const [itemConPrecio, itemSinPrecio] = itemsInsertados || [];
+
+// Fase 2 — avisos automáticos (lógica en el cliente; aquí se verifica que los
+// datos de los que depende lleguen bien): E2E Rib Eye ya trae nivel_max=5 y
+// hoy se pidió existencia 2 + requerido 10 = 12 → posible exceso. También se
+// pidió ayer → repetido.
+check("Exceso: existencia + requerido (12) > nivel_max (5)", itemConPrecio.existencia + itemConPrecio.requerido > insumoConPrecio.nivel_max);
+const { data: listaAyer } = await admin
+  .from("listas_compra")
+  .insert({ business_id: BIZ, chef_id: chefAuth.user.id, fecha: ayer })
+  .select().single();
+await admin.from("lista_compra_items").insert({
+  business_id: BIZ, lista_id: listaAyer.id, insumo_id: insumoConPrecio.id, nombre: insumoConPrecio.nombre,
+  categoria: insumoConPrecio.categoria, unidad: insumoConPrecio.unidad, fecha: ayer, requerido: 4, existencia: 1,
+});
+const { data: itemsAyer } = await admin.from("lista_compra_items").select("insumo_id, requerido").eq("business_id", BIZ).eq("fecha", ayer).gt("requerido", 0);
+check("Repetido: el insumo también se pidió ayer", (itemsAyer || []).some((i) => i.insumo_id === insumoConPrecio.id));
 
 // Rubén, Dueño y Administrador ven el dinero que representa
 const { data: itemsParaRunner } = await runnerSb2.from("lista_compra_items").select("*").eq("fecha", today);

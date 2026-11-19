@@ -18,6 +18,7 @@ import type { Profile, InsumoChef, ListaCompraItemRow, ListaCompraItemStatus, So
 const num = (x: unknown) => { const n = typeof x === "number" ? x : parseFloat(String(x)); return isNaN(n) ? 0 : n; };
 const money = (n: unknown) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(num(n));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const yesterdayISO = () => { const d = new Date(); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 function csvCell(v: unknown) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 
@@ -43,6 +44,7 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
   const [listaId, setListaId] = useState<string | null>(null);
   const [valores, setValores] = useState<Record<string, { requerido: string; existencia: string }>>({});
   const [estados, setEstados] = useState<Record<string, ListaCompraItemStatus>>({});
+  const [pedidosAyer, setPedidosAyer] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -51,11 +53,13 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
 
   const load = useCallback(async () => {
     const hoy = todayISO();
-    const [{ data: ins }, { data: lista }] = await Promise.all([
+    const [{ data: ins }, { data: lista }, { data: ayer }] = await Promise.all([
       sb.rpc("insumos_para_chef"),
       sb.from("listas_compra").select("id").eq("chef_id", profile.id).eq("fecha", hoy).maybeSingle(),
+      sb.from("lista_compra_items").select("insumo_id, requerido").eq("fecha", yesterdayISO()),
     ]);
     setInsumos(((ins as InsumoChef[]) || []).slice().sort((a, b) => a.categoria.localeCompare(b.categoria) || a.nombre.localeCompare(b.nombre)));
+    setPedidosAyer(new Set((ayer || []).filter((it: { insumo_id: string; requerido: number }) => it.requerido > 0).map((it: { insumo_id: string }) => it.insumo_id)));
 
     if (lista) {
       setListaId(lista.id);
@@ -145,6 +149,15 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
 
   const confirmados = insumos.filter((i) => estados[i.id] === "confirmado").length;
 
+  // Fase 2: avisos automáticos — no bloquean nada, solo informan.
+  function alertasDe(i: InsumoChef, v: { requerido: string; existencia: string }) {
+    const exceso = i.nivel_max != null && num(v.existencia) + num(v.requerido) > i.nivel_max;
+    const repetido = pedidosAyer.has(i.id) && num(v.requerido) > 0;
+    return { exceso, repetido };
+  }
+  const totalExceso = insumos.filter((i) => alertasDe(i, valores[i.id] || { requerido: "", existencia: "" }).exceso).length;
+  const totalRepetido = insumos.filter((i) => alertasDe(i, valores[i.id] || { requerido: "", existencia: "" }).repetido).length;
+
   return (
     <div className="cuadra" style={{ minHeight: "100vh" }}>
       <div className="wrap">
@@ -175,6 +188,14 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
               <button className="btn btn-ghost mini-btn" onClick={() => load()}><RefreshCw size={14} />Actualizar</button>
             </div>
 
+            {(totalExceso > 0 || totalRepetido > 0) && (
+              <div className="hint" style={{ marginTop: 6 }}>
+                {totalExceso > 0 && `⚠ ${totalExceso} con posible exceso`}
+                {totalExceso > 0 && totalRepetido > 0 && " · "}
+                {totalRepetido > 0 && `↻ ${totalRepetido} repetido${totalRepetido > 1 ? "s" : ""} de ayer`}
+              </div>
+            )}
+
             <div className="field" style={{ marginTop: 10 }}>
               <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar insumo…" />
             </div>
@@ -186,6 +207,7 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
                   {items.map((i) => {
                     const v = valores[i.id] || { requerido: "", existencia: "" };
                     const estado = estados[i.id];
+                    const { exceso, repetido } = alertasDe(i, v);
                     return (
                       <div key={i.id} style={{ padding: "10px 0", borderTop: "1px solid #EFF3EE" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -197,6 +219,13 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
                           <div><div className="minilabel">Requerido</div><input className="input mini" value={v.requerido} onChange={(e) => setVal(i.id, "requerido", e.target.value)} inputMode="decimal" placeholder="0" /></div>
                           <div><div className="minilabel">Existencia</div><input className="input mini" value={v.existencia} onChange={(e) => setVal(i.id, "existencia", e.target.value)} inputMode="decimal" placeholder="0" /></div>
                         </div>
+                        {(exceso || repetido) && (
+                          <div className="hint" style={{ marginTop: 5, color: "var(--amber)" }}>
+                            {exceso && "⚠ posible exceso (más del máximo normal)"}
+                            {exceso && repetido && " · "}
+                            {repetido && "↻ también se pidió ayer"}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -226,23 +255,26 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
   const isRunner = profile.role === "runner";
 
   const [loaded, setLoaded] = useState(false);
-  const [precios, setPrecios] = useState<Record<string, { nombre: string; precio: number | null }>>({});
+  const [precios, setPrecios] = useState<Record<string, { nombre: string; precio: number | null; nivel_max: number | null }>>({});
   const [items, setItems] = useState<ListaCompraItemRow[]>([]);
+  const [pedidosAyer, setPedidosAyer] = useState<Set<string>>(new Set());
   const [solicitudes, setSolicitudes] = useState<SolicitudRow[]>([]);
   const [sheet, setSheet] = useState<{ kind: "compra" | "precio"; item: ListaCompraItemRow } | null>(null);
   const [editPrecio, setEditPrecio] = useState<{ insumoId: string; nombre: string; precio: number | null } | null>(null);
 
   const load = useCallback(async () => {
     const hoy = todayISO();
-    const [insRes, itemsRes, solRes] = await Promise.all([
-      sb.from("insumos").select("id, nombre, precio"),
+    const [insRes, itemsRes, ayerRes, solRes] = await Promise.all([
+      sb.from("insumos").select("id, nombre, precio, nivel_max"),
       sb.from("lista_compra_items").select("*").eq("fecha", hoy),
+      sb.from("lista_compra_items").select("insumo_id, requerido").eq("fecha", yesterdayISO()),
       isOwner || isRunner ? sb.from("solicitudes").select("*").order("created_at", { ascending: false }) : Promise.resolve({ data: [] }),
     ]);
-    const map: Record<string, { nombre: string; precio: number | null }> = {};
-    (insRes.data || []).forEach((i: { id: string; nombre: string; precio: number | null }) => { map[i.id] = { nombre: i.nombre, precio: i.precio }; });
+    const map: Record<string, { nombre: string; precio: number | null; nivel_max: number | null }> = {};
+    (insRes.data || []).forEach((i: { id: string; nombre: string; precio: number | null; nivel_max: number | null }) => { map[i.id] = { nombre: i.nombre, precio: i.precio, nivel_max: i.nivel_max }; });
     setPrecios(map);
     setItems((((itemsRes.data as ListaCompraItemRow[]) || [])).sort((a, b) => a.categoria.localeCompare(b.categoria) || a.nombre.localeCompare(b.nombre)));
+    setPedidosAyer(new Set((ayerRes.data || []).filter((it: { insumo_id: string; requerido: number }) => it.requerido > 0).map((it: { insumo_id: string }) => it.insumo_id)));
     setSolicitudes((solRes.data as SolicitudRow[]) || []);
     setLoaded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -255,6 +287,16 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
   const vigentes = items.filter((i) => i.status !== "rechazado");
   const totalDinero = vigentes.reduce((s, it) => { const p = precios[it.insumo_id]?.precio; return p ? s + p * it.requerido : s; }, 0);
   const sinPrecio = vigentes.filter((it) => precios[it.insumo_id]?.precio == null).length;
+
+  // Fase 2: avisos automáticos — no bloquean nada, solo informan.
+  function alertasDe(it: ListaCompraItemRow) {
+    const nivelMax = precios[it.insumo_id]?.nivel_max;
+    const exceso = nivelMax != null && it.existencia + it.requerido > nivelMax;
+    const repetido = pedidosAyer.has(it.insumo_id);
+    return { exceso, repetido };
+  }
+  const totalExceso = vigentes.filter((it) => alertasDe(it).exceso).length;
+  const totalRepetido = vigentes.filter((it) => alertasDe(it).repetido).length;
 
   async function palomear(item: ListaCompraItemRow) {
     const { error } = await sb.from("lista_compra_items").update({ status: "confirmado", confirmado_por: profile.id, confirmado_at: new Date().toISOString() }).eq("id", item.id);
@@ -279,6 +321,14 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
         <div className="sumcard"><div className="k">Insumos pedidos</div><div className="v">{vigentes.length}</div></div>
       </div>
 
+      {(totalExceso > 0 || totalRepetido > 0) && (
+        <div className="hint" style={{ marginTop: 8 }}>
+          {totalExceso > 0 && `⚠ ${totalExceso} con posible exceso`}
+          {totalExceso > 0 && totalRepetido > 0 && " · "}
+          {totalRepetido > 0 && `↻ ${totalRepetido} repetido${totalRepetido > 1 ? "s" : ""} de ayer`}
+        </div>
+      )}
+
       {items.length === 0 ? (
         <div className="card" style={{ marginTop: 14 }}>
           <div className="empty"><div className="big">Todavía no hay lista de hoy</div>En cuanto el Chef suba su pedido, aparece aquí.</div>
@@ -290,6 +340,7 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
               key={it.id}
               item={it}
               precio={precios[it.insumo_id]?.precio ?? null}
+              alertas={alertasDe(it)}
               isRunner={isRunner}
               isOwner={isOwner}
               onPalomear={() => palomear(it)}
@@ -365,8 +416,8 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
   );
 }
 
-function ListaItemRow({ item, precio, isRunner, isOwner, onPalomear, onSolicitarCompra, onSolicitarPrecio, onEditarPrecio }: {
-  item: ListaCompraItemRow; precio: number | null; isRunner: boolean; isOwner: boolean;
+function ListaItemRow({ item, precio, alertas, isRunner, isOwner, onPalomear, onSolicitarCompra, onSolicitarPrecio, onEditarPrecio }: {
+  item: ListaCompraItemRow; precio: number | null; alertas: { exceso: boolean; repetido: boolean }; isRunner: boolean; isOwner: boolean;
   onPalomear: () => void; onSolicitarCompra: () => void; onSolicitarPrecio: () => void; onEditarPrecio: () => void;
 }) {
   const subtotal = precio != null ? precio * item.requerido : null;
@@ -382,6 +433,13 @@ function ListaItemRow({ item, precio, isRunner, isOwner, onPalomear, onSolicitar
             {item.status === "confirmado" && <span className="badge badge-ocr">Comprado</span>}
             {item.status === "rechazado" && <span className="badge badge-manual">No se compra</span>}
           </div>
+          {(alertas.exceso || alertas.repetido) && (
+            <div className="hint" style={{ marginTop: 3, color: "var(--amber)" }}>
+              {alertas.exceso && "⚠ posible exceso"}
+              {alertas.exceso && alertas.repetido && " · "}
+              {alertas.repetido && "↻ también se pidió ayer"}
+            </div>
+          )}
         </div>
         <div className="exp-right">
           <div className="exp-amt">{subtotal != null ? money(subtotal) : "sin precio"}</div>

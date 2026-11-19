@@ -81,12 +81,14 @@ export interface InsumoRow {
   activo: boolean;
 }
 
-/** Lo que ve el Chef al armar su lista: igual que InsumoRow pero sin precio. */
+/** Lo que ve el Chef al armar su lista: igual que InsumoRow pero sin precio.
+ *  nivel_max sí viaja (no es dinero) — lo usa la alerta de exceso. */
 export interface InsumoChef {
   id: string;
   categoria: string;
   nombre: string;
   unidad: string;
+  nivel_max: number | null;
 }
 
 export interface ListaCompraRow {
