@@ -330,7 +330,11 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{s.insumo_nombre}</div>
                   <span className={`badge ${s.status === "aprobada" ? "badge-ocr" : "badge-manual"}`}>{s.status === "aprobada" ? "Aprobada" : "Declinada"}</span>
                 </div>
-                <div className="hint">{s.tipo === "precio" ? `Precio propuesto ${money(s.precio_propuesto)}` : "Pidió quitarlo de la lista"}</div>
+                <div className="hint">
+                  {s.tipo === "precio"
+                    ? `Precio propuesto ${money(s.precio_propuesto)}`
+                    : `Pidió quitarlo de la lista${s.monto != null ? ` · se ahorró ${money(s.monto)}` : ""}`}
+                </div>
               </div>
             ))}
           </div>
@@ -339,7 +343,12 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
 
       {sheet?.kind === "compra" && (
         <Sheet title="Pedir quitar de la lista" onClose={() => setSheet(null)}>
-          <SolicitarCompraForm item={sheet.item} onDone={() => { setSheet(null); flash("Solicitud enviada"); load(); }} onCancel={() => setSheet(null)} />
+          <SolicitarCompraForm
+            item={sheet.item}
+            precio={precios[sheet.item.insumo_id]?.precio ?? null}
+            onDone={() => { setSheet(null); flash("Solicitud enviada"); load(); }}
+            onCancel={() => setSheet(null)}
+          />
         </Sheet>
       )}
       {sheet?.kind === "precio" && (
@@ -390,7 +399,10 @@ function ListaItemRow({ item, precio, isRunner, isOwner, onPalomear, onSolicitar
   );
 }
 
-function SolicitarCompraForm({ item, onDone, onCancel }: { item: ListaCompraItemRow; onDone: () => void; onCancel: () => void }) {
+function SolicitarCompraForm({ item, precio, onDone, onCancel }: {
+  item: ListaCompraItemRow; precio: number | null; onDone: () => void; onCancel: () => void;
+}) {
+  const monto = precio != null ? precio * item.requerido : null;
   const [nota, setNota] = useState("");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
@@ -413,7 +425,12 @@ function SolicitarCompraForm({ item, onDone, onCancel }: { item: ListaCompraItem
 
   return (
     <div>
-      <p className="hint" style={{ fontSize: 14, marginBottom: 14 }}>Le vas a pedir al dueño que <b>no se compre {item.nombre}</b> hoy. Si lo aprueba, no se gasta ese dinero.</p>
+      <p className="hint" style={{ fontSize: 14, marginBottom: 14 }}>
+        Le vas a pedir al dueño que <b>no se compre {item.nombre}</b> hoy
+        ({item.requerido} {item.unidad}
+        {monto != null ? <> · representa <b>{money(monto)}</b></> : " · este insumo todavía no tiene precio"}).
+        Si lo aprueba, no se gasta ese dinero.
+      </p>
       <div className="field"><label className="label">Nota (opcional)</label><input className="input" value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Ya hay suficiente en almacén…" /></div>
       {err && <div className="err"><AlertTriangle size={14} />{err}</div>}
       <div className="row2" style={{ marginTop: 14 }}>
@@ -530,7 +547,7 @@ function SolicitudPendienteRow({ s, flash, onResolved }: {
       <div className="hint">
         {s.tipo === "precio"
           ? `Precio propuesto: ${money(s.precio_propuesto)} (antes ${s.precio_actual != null ? money(s.precio_actual) : "sin precio"})`
-          : "Pide quitarlo de la lista de hoy (está en exceso)"}
+          : `Pide quitarlo de la lista de hoy (está en exceso)${s.monto != null ? ` · representa ${money(s.monto)}` : ""}`}
       </div>
       {s.nota && <div className="hint">&quot;{s.nota}&quot;</div>}
       <div className="row2" style={{ marginTop: 8 }}>

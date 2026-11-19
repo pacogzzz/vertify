@@ -501,6 +501,7 @@ res = await fetch(`${BASE}/api/solicitudes`, {
 check("POST /api/solicitudes crea una solicitud de compra (Encargado)", res.ok, `status ${res.status}`);
 
 const { data: solCompraRow } = await admin.from("solicitudes").select("*").eq("lista_compra_item_id", itemConPrecio.id).single();
+check("La solicitud de compra trae el monto (10 × $300 = $3000)", solCompraRow?.monto === 3000, `monto ${solCompraRow?.monto}`);
 res = await fetch(`${BASE}/api/solicitudes/resolver`, {
   method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
   body: JSON.stringify({ solicitud_id: solCompraRow.id, aprobar: true }),

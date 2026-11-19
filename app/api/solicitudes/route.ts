@@ -64,11 +64,14 @@ export async function POST(req: Request) {
   } else {
     const itemId = (body.lista_compra_item_id || "").trim();
     if (!itemId) return NextResponse.json({ error: "bad_request" }, { status: 400 });
-    const { data: item } = await admin.from("lista_compra_items").select("id, business_id, insumo_id").eq("id", itemId).single();
+    const { data: item } = await admin.from("lista_compra_items").select("id, business_id, insumo_id, requerido").eq("id", itemId).single();
     if (!item || item.business_id !== me.business_id || item.insumo_id !== insumoId) {
       return NextResponse.json({ error: "No se encontró ese producto en la lista." }, { status: 404 });
     }
     row.lista_compra_item_id = itemId;
+    // Cuánto dinero representa quitar esto — para que Rubén y el dueño lo vean,
+    // no solo el nombre. Null si el insumo todavía no tiene precio.
+    row.monto = insumo.precio ? insumo.precio * item.requerido : null;
   }
 
   const { error } = await admin.from("solicitudes").insert(row);

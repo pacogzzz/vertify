@@ -125,6 +125,8 @@ export interface SolicitudRow {
   lista_compra_item_id: string | null;
   precio_actual: number | null;
   precio_propuesto: number | null;
+  /** Solo tipo="compra": cuánto representa en dinero quitar ese insumo (requerido × precio). */
+  monto: number | null;
   nota: string | null;
   solicitado_por: string;
   status: SolicitudStatus;
