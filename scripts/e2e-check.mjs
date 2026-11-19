@@ -19,6 +19,8 @@ const COLLAB_DOMAIN = "vertify.local";
 const collabEmail = (username) => `${username}@${COLLAB_DOMAIN}`;
 const RUNNER = { username: "e2e-runner", password: "prueba-e2e-123", name: "E2E Rubén" };
 const ADMIN_COLLAB = { username: "e2e-admin", password: "prueba-e2e-123", name: "E2E Admin" };
+const CHEF_COLLAB = { username: "e2e-chef", password: "prueba-e2e-123", name: "E2E Chef" };
+const ADMIN2_COLLAB = { username: "e2e-admin2", password: "prueba-e2e-123", name: "E2E Admin 2" }; // ADMIN_COLLAB termina como "caja" más abajo
 
 const results = [];
 function check(name, ok, extra = "") {
@@ -91,6 +93,12 @@ async function cleanup() {
     bizIds = [...new Set((profs || []).map((p) => p.business_id))];
     if (bizIds.length) {
       await admin.from("fundings").delete().in("business_id", bizIds);
+      // Lista Compra: borrar en orden (solicitudes → items → listas → insumos)
+      // porque nada de esto tiene on delete cascade hacia profiles/businesses.
+      await admin.from("solicitudes").delete().in("business_id", bizIds);
+      await admin.from("lista_compra_items").delete().in("business_id", bizIds);
+      await admin.from("listas_compra").delete().in("business_id", bizIds);
+      await admin.from("insumos").delete().in("business_id", bizIds);
       for (const b of bizIds) {
         await emptyBucket("receipts", b);
         await emptyBucket("cash-photos", b);
@@ -274,12 +282,20 @@ lowData = await res.json().catch(() => ({}));
 const { data: bizRow2 } = await admin.from("businesses").select("low_cash_alerted").eq("id", BIZ).single();
 check("Tras recargar, la alerta se reinicia", lowData.alert === false && bizRow2?.low_cash_alerted === false);
 
-// 17. OCR por la ruta real, autenticado (imagen mínima → ilegible es lo esperado)
-res = await fetch(`${BASE}/api/read-receipt`, {
-  method: "POST", headers: { "Content-Type": "application/json", Cookie: runnerCookie },
-  body: JSON.stringify({ image: jpegB64 }),
-});
-check("POST /api/read-receipt autenticado responde (422 ilegible esperado)", res.status === 422 || res.ok, `status ${res.status}`);
+// 17. OCR por la ruta real, autenticado (imagen mínima → ilegible es lo esperado).
+// Gemini a veces se cuelga varios minutos (alta demanda del lado de Google,
+// ajeno a la app) y con eso tronaba TODO el script; con límite de tiempo
+// nomás se reporta como falla de esta prueba y el resto sigue corriendo.
+try {
+  res = await fetch(`${BASE}/api/read-receipt`, {
+    method: "POST", headers: { "Content-Type": "application/json", Cookie: runnerCookie },
+    body: JSON.stringify({ image: jpegB64 }),
+    signal: AbortSignal.timeout(45000),
+  });
+  check("POST /api/read-receipt autenticado responde (422 ilegible esperado)", res.status === 422 || res.ok, `status ${res.status}`);
+} catch (err) {
+  check("POST /api/read-receipt autenticado responde (422 ilegible esperado)", false, `${err.name}: tardó demasiado (posible saturación de Gemini, ajeno a la app)`);
+}
 
 res = await fetch(`${BASE}/api/read-receipt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: jpegB64 }) });
 check("POST /api/read-receipt SIN sesión → 401", res.status === 401);
@@ -361,6 +377,12 @@ check("La contraseña anterior del encargado ya no sirve", !!oldPassErr);
 const { data: newPassAuth, error: newPassErr } = await createClient(URL_, ANON, { auth: { persistSession: false } })
   .auth.signInWithPassword({ email: collabEmail(RUNNER.username), password: newRunnerPassword });
 check("La contraseña nueva (restablecida) del encargado sí funciona", !newPassErr && !!newPassAuth?.session);
+// Restablecer la contraseña invalida la sesión vieja del encargado — tanto
+// la cookie (runnerCookie) como el cliente (runnerSb) de ahí en adelante
+// hay que reemplazarlos por estos, logueados con la contraseña nueva.
+const runnerCookieVigente = authCookie(newPassAuth.session);
+const runnerSb2 = createClient(URL_, ANON, { auth: { persistSession: false } });
+await runnerSb2.auth.signInWithPassword({ email: collabEmail(RUNNER.username), password: newRunnerPassword });
 
 // Un dueño de OTRO negocio no puede restablecer la contraseña de este colaborador
 res = await fetch(`${BASE}/api/reset-collaborator-password`, {
@@ -368,6 +390,139 @@ res = await fetch(`${BASE}/api/reset-collaborator-password`, {
   body: JSON.stringify({ profileId: runnerProf.id, password: "lo-que-sea-123" }),
 });
 check("RLS/endpoint: un dueño ajeno NO puede restablecer la contraseña de este colaborador", res.status === 404, `status ${res.status}`);
+
+// 20. Lista Compra: catálogo sin precio para el Chef, captura diaria,
+// solicitudes de precio y de compra con aprobación del dueño, y que el
+// Chef jamás pueda ver un precio por ningún camino.
+res = await fetch(`${BASE}/api/create-collaborator`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ role: "chef", username: CHEF_COLLAB.username, password: CHEF_COLLAB.password, name: CHEF_COLLAB.name }),
+});
+check("POST /api/create-collaborator crea un Chef", res.ok, `status ${res.status}`);
+
+res = await fetch(`${BASE}/api/create-collaborator`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ role: "admin", username: ADMIN2_COLLAB.username, password: ADMIN2_COLLAB.password, name: ADMIN2_COLLAB.name }),
+});
+check("POST /api/create-collaborator crea un segundo Administrador", res.ok, `status ${res.status}`);
+
+const chefSb = createClient(URL_, ANON, { auth: { persistSession: false } });
+const { data: chefAuth, error: chefLoginErr } = await chefSb.auth.signInWithPassword({ email: collabEmail(CHEF_COLLAB.username), password: CHEF_COLLAB.password });
+check("Login de Chef con usuario (sin correo real)", !chefLoginErr && !!chefAuth?.session);
+
+const admin2Sb = createClient(URL_, ANON, { auth: { persistSession: false } });
+const { data: admin2Auth } = await admin2Sb.auth.signInWithPassword({ email: collabEmail(ADMIN2_COLLAB.username), password: ADMIN2_COLLAB.password });
+
+// Dos insumos de prueba: uno con precio, otro sin precio (Rubén lo va a proponer)
+const { data: insumoConPrecio } = await admin
+  .from("insumos")
+  .insert({ business_id: BIZ, categoria: "Carnes", nombre: "E2E Rib Eye", unidad: "KG", precio: 300 })
+  .select().single();
+const { data: insumoSinPrecio } = await admin
+  .from("insumos")
+  .insert({ business_id: BIZ, categoria: "Abarrotes", nombre: "E2E Aceite", unidad: "LT", precio: null })
+  .select().single();
+check("Insumos de prueba creados", !!insumoConPrecio && !!insumoSinPrecio);
+
+// El Chef ve el catálogo SIN precio, vía la función de servidor
+const { data: catalogoChef, error: catalogoChefErr } = await chefSb.rpc("insumos_para_chef");
+const chefVeAmbos = (catalogoChef || []).some((i) => i.id === insumoConPrecio.id) && (catalogoChef || []).some((i) => i.id === insumoSinPrecio.id);
+check("Chef ve el catálogo vía insumos_para_chef()", !catalogoChefErr && chefVeAmbos);
+check("insumos_para_chef() NUNCA manda el precio", (catalogoChef || []).every((i) => !("precio" in i)));
+
+// RLS: el Chef no puede leer la tabla insumos directo (ahí sí vive el precio)
+const { data: insumosDirecto } = await chefSb.from("insumos").select("*");
+check("RLS: Chef NO puede leer la tabla insumos directo", (insumosDirecto || []).length === 0);
+
+// RLS: el Chef tampoco puede leer solicitudes (ahí también hay precios)
+const { data: solicitudesDirecto } = await chefSb.from("solicitudes").select("*");
+check("RLS: Chef NO puede leer la tabla solicitudes", (solicitudesDirecto || []).length === 0);
+
+// El Chef manda su pedido de hoy: ambos insumos
+const { data: listaHoy, error: listaErr } = await chefSb
+  .from("listas_compra")
+  .upsert({ business_id: BIZ, chef_id: chefAuth.user.id, fecha: today }, { onConflict: "business_id,chef_id,fecha" })
+  .select().single();
+check("Chef crea su lista de hoy", !listaErr && !!listaHoy, listaErr?.message);
+
+const { data: itemsInsertados, error: itemsErr } = await chefSb.from("lista_compra_items").insert([
+  { business_id: BIZ, lista_id: listaHoy.id, insumo_id: insumoConPrecio.id, nombre: insumoConPrecio.nombre, categoria: insumoConPrecio.categoria, unidad: insumoConPrecio.unidad, fecha: today, requerido: 10, existencia: 2 },
+  { business_id: BIZ, lista_id: listaHoy.id, insumo_id: insumoSinPrecio.id, nombre: insumoSinPrecio.nombre, categoria: insumoSinPrecio.categoria, unidad: insumoSinPrecio.unidad, fecha: today, requerido: 5, existencia: 1 },
+]).select();
+check("Chef sube los 2 insumos de su pedido", !itemsErr && (itemsInsertados || []).length === 2, itemsErr?.message);
+const [itemConPrecio, itemSinPrecio] = itemsInsertados || [];
+
+// Rubén, Dueño y Administrador ven el dinero que representa
+const { data: itemsParaRunner } = await runnerSb2.from("lista_compra_items").select("*").eq("fecha", today);
+const { data: insumosParaRunner } = await runnerSb2.from("insumos").select("id, precio");
+const precioMap = Object.fromEntries((insumosParaRunner || []).map((i) => [i.id, i.precio]));
+const totalEncargado = (itemsParaRunner || []).reduce((s, it) => s + (precioMap[it.insumo_id] ? precioMap[it.insumo_id] * it.requerido : 0), 0);
+check("Encargado ve cuánto dinero representa la lista ($3000)", Math.abs(totalEncargado - 3000) < 0.01, `vio $${totalEncargado}`);
+
+const { data: insumosParaAdmin2 } = await admin2Sb.from("insumos").select("id, precio").eq("id", insumoConPrecio.id);
+check("Administrador también ve los precios (solo lectura)", (insumosParaAdmin2 || [])[0]?.precio === 300);
+
+// 21. Solicitud de PRECIO: Rubén propone precio para el insumo sin precio
+res = await fetch(`${BASE}/api/solicitudes`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: runnerCookieVigente },
+  body: JSON.stringify({ tipo: "precio", insumo_id: insumoSinPrecio.id, precio_propuesto: 85, nota: "precio de hoy en la tienda" }),
+});
+check("POST /api/solicitudes crea una solicitud de precio (Encargado)", res.ok, `status ${res.status}`);
+
+res = await fetch(`${BASE}/api/solicitudes`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ tipo: "precio", insumo_id: insumoSinPrecio.id, precio_propuesto: 999 }),
+});
+check("RLS/endpoint: el dueño NO puede crear una solicitud (solo Encargado)", res.status === 403, `status ${res.status}`);
+
+const { data: solPrecioRow } = await admin.from("solicitudes").select("*").eq("insumo_id", insumoSinPrecio.id).eq("tipo", "precio").single();
+check("La solicitud de precio quedó pendiente", solPrecioRow?.status === "pendiente");
+
+res = await fetch(`${BASE}/api/solicitudes/resolver`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: runnerCookieVigente },
+  body: JSON.stringify({ solicitud_id: solPrecioRow.id, aprobar: true }),
+});
+check("RLS/endpoint: el Encargado NO puede resolver su propia solicitud", res.status === 403, `status ${res.status}`);
+
+res = await fetch(`${BASE}/api/solicitudes/resolver`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ solicitud_id: solPrecioRow.id, aprobar: true }),
+});
+check("POST /api/solicitudes/resolver aprueba la solicitud de precio (dueño)", res.ok, `status ${res.status}`);
+
+const { data: insumoActualizado } = await admin.from("insumos").select("precio").eq("id", insumoSinPrecio.id).single();
+check("El precio del insumo quedó en $85 tras aprobar", insumoActualizado?.precio === 85, `quedó en ${insumoActualizado?.precio}`);
+
+// 22. Solicitud de COMPRA: Rubén pide quitar el insumo con precio (está en exceso)
+res = await fetch(`${BASE}/api/solicitudes`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: runnerCookieVigente },
+  body: JSON.stringify({ tipo: "compra", insumo_id: insumoConPrecio.id, lista_compra_item_id: itemConPrecio.id, nota: "ya hay de sobra" }),
+});
+check("POST /api/solicitudes crea una solicitud de compra (Encargado)", res.ok, `status ${res.status}`);
+
+const { data: solCompraRow } = await admin.from("solicitudes").select("*").eq("lista_compra_item_id", itemConPrecio.id).single();
+res = await fetch(`${BASE}/api/solicitudes/resolver`, {
+  method: "POST", headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+  body: JSON.stringify({ solicitud_id: solCompraRow.id, aprobar: true }),
+});
+check("POST /api/solicitudes/resolver aprueba la solicitud de compra (dueño)", res.ok, `status ${res.status}`);
+
+const { data: itemRechazado } = await admin.from("lista_compra_items").select("status").eq("id", itemConPrecio.id).single();
+check("El insumo quedó 'rechazado' (no se compra) tras aprobar", itemRechazado?.status === "rechazado");
+
+// El Chef ve que ese insumo fue rechazado — sin precio en ningún lado
+const { data: itemsChefDespues } = await chefSb.from("lista_compra_items").select("*").eq("lista_id", listaHoy.id);
+const itemVistoPorChef = (itemsChefDespues || []).find((i) => i.id === itemConPrecio.id);
+check("El Chef ve su insumo marcado como rechazado", itemVistoPorChef?.status === "rechazado");
+check("La fila que ve el Chef no trae ningún precio", itemVistoPorChef && !("precio" in itemVistoPorChef));
+
+// RLS: Rubén puede palomear (confirmar) un item, pero NUNCA rechazarlo directo
+const { error: palomeoErr } = await runnerSb2.from("lista_compra_items").update({ status: "confirmado" }).eq("id", itemSinPrecio.id);
+check("Encargado puede marcar un insumo como confirmado (palomear)", !palomeoErr, palomeoErr?.message);
+
+const { error: rechazoDirectoErr } = await runnerSb2.from("lista_compra_items").update({ status: "rechazado" }).eq("id", itemSinPrecio.id);
+const { data: itemTrasIntento } = await admin.from("lista_compra_items").select("status").eq("id", itemSinPrecio.id).single();
+check("RLS: Encargado NO puede poner 'rechazado' directo (sin pasar por una solicitud)", itemTrasIntento?.status !== "rechazado", `quedó en ${itemTrasIntento?.status}`);
 
 // ---------- limpieza ----------
 const removed = await cleanup();

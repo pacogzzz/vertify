@@ -5,13 +5,14 @@ import {
   Camera, Wallet, Plus, Download, Settings, Check, X,
   ChevronDown, ChevronRight, ChevronLeft, Receipt, Store, AlertTriangle,
   Loader2, Image as ImageIcon, Banknote, LogOut, UserPlus, CreditCard,
-  CalendarDays, PencilLine, ChefHat, ShieldCheck, Users, KeyRound, Clock,
+  CalendarDays, PencilLine, ShieldCheck, Users, KeyRound, Clock,
   ClipboardList, TrendingUp, HandCoins, LayoutDashboard,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { TIENDAS } from "@/lib/stores";
 import { COLLAB_ROLES, roleLabel } from "@/lib/roles";
 import { normalizeUsername, isValidUsername } from "@/lib/username";
+import { ChefCaptura, ListaCompraModule } from "./ListaCompra";
 import type { Business, Profile, Role, ExpenseRow, FundingRow, ExpenseItem, ReceiptData } from "@/lib/types";
 
 /* ============================================================
@@ -255,7 +256,7 @@ interface ModuleDef { key: DuenoModuleKey; label: string; navLabel: string; icon
 /* `label` es el nombre completo (título del módulo); `navLabel` es la
    versión corta que cabe en la barra sin cortarse en un teléfono angosto. */
 const DUENO_MODULES: ModuleDef[] = [
-  { key: "lista-compra", label: "Lista Compra", navLabel: "Lista", icon: <ClipboardList size={19} />, ready: false },
+  { key: "lista-compra", label: "Lista Compra", navLabel: "Lista", icon: <ClipboardList size={19} />, ready: true },
   { key: "saldos-compra", label: "Saldos Compra", navLabel: "Saldos", icon: <Banknote size={19} />, ready: true },
   { key: "ventas-flujos", label: "Ventas y flujos", navLabel: "Ventas", icon: <TrendingUp size={19} />, ready: false },
   { key: "nomina", label: "Nómina", navLabel: "Nómina", icon: <HandCoins size={19} />, ready: false },
@@ -435,7 +436,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
      todavía no está construida. Cada una es su propia pantalla (no una
      vista compartida) para poder trabajarlas por separado más adelante;
      hoy solo comparten el tipo de mensaje. */
-  if (profile.role === "chef") return <ChefPlaceholder name={profile.name} onLogout={logout} />;
+  if (profile.role === "chef") return <ChefCaptura profile={profile} bizId={biz.id} onLogout={logout} />;
   if (profile.role === "caja") return <CajaPlaceholder name={profile.name} onLogout={logout} />;
 
   return (
@@ -464,33 +465,34 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
         {lowCash && (
           <div className="banner-warn" style={{ marginTop: 10 }}>
             <AlertTriangle size={15} />
-            {canViewDashboard
-              ? `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Prepara la siguiente entrega.`
-              : `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Pídele más dinero a tu superior.`}
+            {isRunner
+              ? `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Pídele más dinero a tu superior.`
+              : `Queda poco efectivo (${money(Math.max(cashBalance, 0))}). Prepara la siguiente entrega.`}
           </div>
         )}
 
-        {!canViewDashboard
-          ? <Encargado runnerName={runnerName} cashBalance={cashBalance} corte={corte} todays={todays} onCompra={startCompra} />
-          : (
-            <>
-              {activeModule === "saldos-compra" && (
-                <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} readOnly={!isOwner} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />
-              )}
-              {activeModule === "colaboradores" && (
-                <ColaboradoresModule bizId={biz.id} flash={flash} readOnly={!isOwner} onAdd={() => setModal("addCollaborator")} />
-              )}
-              {activeModule === "lista-compra" && <ModulePendiente title="Lista Compra" icon={<ClipboardList size={28} />} />}
-              {activeModule === "ventas-flujos" && <ModulePendiente title="Ventas y flujos" icon={<TrendingUp size={28} />} />}
-              {activeModule === "nomina" && <ModulePendiente title="Nómina" icon={<HandCoins size={28} />} />}
-              {activeModule === "dashboard" && <ModulePendiente title="Dashboard" icon={<LayoutDashboard size={28} />} />}
-            </>
-          )}
+        {/* Encargado, Dueño y Administrador comparten la misma barra de 7
+            módulos. "Saldos Compra" es la pantalla de cada quien (Registrar
+            compra para Encargado, el panel para Dueño/Administrador);
+            "Lista Compra" y "Colaboradores" ya tienen contenido real; el
+            resto sigue "próximamente". */}
+        {activeModule === "saldos-compra" && (
+          isRunner
+            ? <Encargado runnerName={runnerName} cashBalance={cashBalance} corte={corte} todays={todays} onCompra={startCompra} />
+            : <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} readOnly={!isOwner} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />
+        )}
+        {activeModule === "lista-compra" && <ListaCompraModule bizId={biz.id} profile={profile} flash={flash} />}
+        {activeModule === "colaboradores" && (
+          canViewDashboard
+            ? <ColaboradoresModule bizId={biz.id} flash={flash} readOnly={!isOwner} onAdd={() => setModal("addCollaborator")} />
+            : <ModulePendiente title="Colaboradores" icon={<Users size={28} />} />
+        )}
+        {activeModule === "ventas-flujos" && <ModulePendiente title="Ventas y flujos" icon={<TrendingUp size={28} />} />}
+        {activeModule === "nomina" && <ModulePendiente title="Nómina" icon={<HandCoins size={28} />} />}
+        {activeModule === "dashboard" && <ModulePendiente title="Dashboard" icon={<LayoutDashboard size={28} />} />}
       </div>
 
-      {canViewDashboard
-        ? <BottomNav modules={DUENO_MODULES} active={activeModule} onSelect={setActiveModule} onCenter={startCompra} />
-        : <PendingBottomNav />}
+      <BottomNav modules={DUENO_MODULES} active={activeModule} onSelect={setActiveModule} onCenter={startCompra} />
 
       {/* modals */}
       {modal === "paymethod" && (
@@ -1367,32 +1369,7 @@ function ResetPasswordInline({ profileId, onDone, onCancel }: {
   );
 }
 
-/* ---------- Chef y Caja: cuenta lista, interfaz propia pendiente ---------- */
-function ChefPlaceholder({ name, onLogout }: { name: string; onLogout: () => void }) {
-  return (
-    <div className="cuadra" style={{ minHeight: "100vh" }}>
-      <div className="wrap">
-        <header className="topbar">
-          <div className="brand">
-            <div className="brand-mark">$</div>
-            <div><div className="brand-name">Vertify</div><div className="brand-sub">Chef</div></div>
-          </div>
-          <div className="topbar-right">
-            <div className="rolechip"><ChefHat size={15} />Chef</div>
-          </div>
-        </header>
-        <div className="card" style={{ marginTop: 40, padding: "32px 20px", textAlign: "center" }}>
-          <ChefHat size={30} style={{ opacity: 0.5, marginBottom: 10 }} />
-          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>Hola, {name}</div>
-          <div className="hint">Tu acceso como Chef ya está listo. Pronto vas a tener aquí tu propia pantalla.</div>
-        </div>
-        <button className="btn btn-ghost btn-block" style={{ marginTop: 16 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
-      </div>
-      <PendingBottomNav />
-    </div>
-  );
-}
-
+/* ---------- Caja: cuenta lista, interfaz propia pendiente ---------- */
 function CajaPlaceholder({ name, onLogout }: { name: string; onLogout: () => void }) {
   return (
     <div className="cuadra" style={{ minHeight: "100vh" }}>
@@ -1496,7 +1473,7 @@ function ModulePendiente({ title, icon }: { title: string; icon: React.ReactNode
 }
 
 /* ---------- sheet/modal ---------- */
-function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div className="overlay" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>

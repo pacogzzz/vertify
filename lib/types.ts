@@ -64,3 +64,71 @@ export interface ReceiptData {
   items?: { name?: string; qty?: number; price?: number }[];
   error?: string;
 }
+
+/* ---------- Lista Compra ---------- */
+
+/** Catálogo de insumos. El Chef nunca lee esto directo (trae precio); usa
+ *  la función insumos_para_chef() del servidor, que nunca manda el precio. */
+export interface InsumoRow {
+  id: string;
+  business_id: string;
+  categoria: string;
+  nombre: string;
+  unidad: string;
+  precio: number | null;
+  nivel_min: number | null;
+  nivel_max: number | null;
+  activo: boolean;
+}
+
+/** Lo que ve el Chef al armar su lista: igual que InsumoRow pero sin precio. */
+export interface InsumoChef {
+  id: string;
+  categoria: string;
+  nombre: string;
+  unidad: string;
+}
+
+export interface ListaCompraRow {
+  id: string;
+  business_id: string;
+  chef_id: string;
+  fecha: string; // YYYY-MM-DD
+}
+
+export type ListaCompraItemStatus = "pendiente" | "confirmado" | "rechazado";
+
+export interface ListaCompraItemRow {
+  id: string;
+  business_id: string;
+  lista_id: string;
+  insumo_id: string;
+  nombre: string;
+  categoria: string;
+  unidad: string;
+  fecha: string; // YYYY-MM-DD
+  requerido: number;
+  existencia: number;
+  status: ListaCompraItemStatus;
+  confirmado_por: string | null;
+}
+
+export type SolicitudTipo = "precio" | "compra";
+export type SolicitudStatus = "pendiente" | "aprobada" | "declinada";
+
+export interface SolicitudRow {
+  id: string;
+  business_id: string;
+  tipo: SolicitudTipo;
+  insumo_id: string;
+  insumo_nombre: string;
+  lista_compra_item_id: string | null;
+  precio_actual: number | null;
+  precio_propuesto: number | null;
+  nota: string | null;
+  solicitado_por: string;
+  status: SolicitudStatus;
+  resuelto_por: string | null;
+  resuelto_at: string | null;
+  created_at: string;
+}
