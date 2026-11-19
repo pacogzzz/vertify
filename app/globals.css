@@ -15,7 +15,7 @@ html, body { margin: 0; padding: 0; background: #EEF1EC; }
   -webkit-font-smoothing:antialiased;
 }
 .cuadra *{box-sizing:border-box;}
-.cuadra .wrap{max-width:680px;margin:0 auto;padding:0 16px calc(110px + env(safe-area-inset-bottom));}
+.cuadra .wrap{max-width:680px;margin:0 auto;padding:0 16px calc(126px + env(safe-area-inset-bottom));}
 
 /* Fija en pantalla (no se va con el scroll) y respeta el notch/barra de
    estado del teléfono: si no, en un iPhone en modo PWA el botón de
@@ -30,6 +30,35 @@ html, body { margin: 0; padding: 0; background: #EEF1EC; }
 .cuadra .brand-name{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:-.02em;line-height:1;}
 .cuadra .brand-sub{font-size:12px;color:var(--muted);margin-top:2px;}
 .cuadra .topbar-right{display:flex;align-items:center;gap:8px;}
+
+/* Barra de navegación de abajo: fija en pantalla (no sticky — igual que
+   el topbar, aprende de ese bug: tiene que quedarse SIEMPRE visible sin
+   importar el scroll) y con espacio para el home indicator del iPhone. */
+.cuadra .bottomnav{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;
+  background:#fff;border-top:1px solid var(--line);
+  box-shadow:0 -8px 24px rgba(20,36,28,.08);
+  padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+}
+.cuadra .bottomnav-inner{display:flex;align-items:flex-end;justify-content:space-between;max-width:520px;margin:0 auto;}
+.cuadra .bottomnav-item{
+  flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;
+  background:none;border:0;padding:7px 0 5px;border-radius:12px;color:var(--muted);
+  font:inherit;cursor:pointer;transition:.15s;
+}
+.cuadra .bottomnav-item:hover{background:var(--paper);}
+.cuadra .bottomnav-item span{font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+.cuadra .bottomnav-item.active{color:var(--saldo-deep);}
+.cuadra .bottomnav-item.pending{opacity:.5;}
+.cuadra .bottomnav-center{
+  width:52px;height:52px;flex-shrink:0;margin:0 2px;transform:translateY(-16px);
+  border-radius:50%;border:4px solid #fff;cursor:pointer;
+  background:linear-gradient(155deg,#27B06E,#0F5C39);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--disp);font-weight:700;font-size:20px;
+  box-shadow:0 8px 18px rgba(15,92,57,.32);
+}
+.cuadra .bottomnav-center:hover{filter:brightness(1.06);}
 .cuadra .switch{display:inline-flex;background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px;}
 .cuadra .switch button{border:0;background:transparent;font:inherit;font-weight:600;font-size:13px;padding:7px 12px;border-radius:999px;color:var(--muted);cursor:pointer;display:flex;gap:6px;align-items:center;transition:.15s;}
 .cuadra .switch button.active{background:var(--ink);color:#fff;}

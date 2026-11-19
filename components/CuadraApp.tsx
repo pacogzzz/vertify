@@ -6,6 +6,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, Receipt, Store, AlertTriangle,
   Loader2, Image as ImageIcon, Banknote, LogOut, UserPlus, CreditCard,
   CalendarDays, PencilLine, ChefHat, ShieldCheck, Users, KeyRound, Clock,
+  ClipboardList, TrendingUp, HandCoins, LayoutDashboard,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { TIENDAS } from "@/lib/stores";
@@ -239,6 +240,29 @@ function revisarMontos(m: Montos, ocr: ReceiptData | null) {
    ============================================================ */
 type ModalKind = "paymethod" | "compra" | "recarga" | "settings" | "addCollaborator" | "collaborators" | "fotos" | null;
 
+/* ============================================================
+   Barra de navegación de abajo: 3 módulos + círculo con el logo
+   (aplicar gasto) + 3 módulos más. Hoy solo Saldos Compra y
+   Colaboradores tienen contenido real; el resto es "próximamente"
+   hasta que trabajemos cada módulo. Solo la ve quien ve el panel
+   completo (Dueño/Administrador); los demás roles tienen la misma
+   barra pero con todo pendiente (ver PendingBottomNav).
+   ============================================================ */
+type DuenoModuleKey = "lista-compra" | "saldos-compra" | "ventas-flujos" | "nomina" | "colaboradores" | "dashboard";
+
+interface ModuleDef { key: DuenoModuleKey; label: string; navLabel: string; icon: React.ReactNode; ready: boolean }
+
+/* `label` es el nombre completo (título del módulo); `navLabel` es la
+   versión corta que cabe en la barra sin cortarse en un teléfono angosto. */
+const DUENO_MODULES: ModuleDef[] = [
+  { key: "lista-compra", label: "Lista Compra", navLabel: "Lista", icon: <ClipboardList size={19} />, ready: false },
+  { key: "saldos-compra", label: "Saldos Compra", navLabel: "Saldos", icon: <Banknote size={19} />, ready: true },
+  { key: "ventas-flujos", label: "Ventas y flujos", navLabel: "Ventas", icon: <TrendingUp size={19} />, ready: false },
+  { key: "nomina", label: "Nómina", navLabel: "Nómina", icon: <HandCoins size={19} />, ready: false },
+  { key: "colaboradores", label: "Colaboradores", navLabel: "Equipo", icon: <Users size={19} />, ready: true },
+  { key: "dashboard", label: "Dashboard", navLabel: "Panel", icon: <LayoutDashboard size={19} />, ready: false },
+];
+
 export default function CuadraApp({ profile, business }: { profile: Profile; business: Business }) {
   const sb = supabaseBrowser();
   const isOwner = profile.role === "owner";
@@ -255,6 +279,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
   const [fundings, setFundings] = useState<UIFunding[]>([]);
   const [expenses, setExpenses] = useState<UIExpense[]>([]);
   const [modal, setModal] = useState<ModalKind>(null);
+  const [activeModule, setActiveModule] = useState<DuenoModuleKey>("saldos-compra");
   const [fotosSel, setFotosSel] = useState<DateSel | null>(null);
   const [payMethod, setPayMethod] = useState<PayMethod>("efectivo");
   const [ticket, setTicket] = useState<TicketState>(TICKET_NONE);
@@ -447,8 +472,25 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
 
         {!canViewDashboard
           ? <Encargado runnerName={runnerName} cashBalance={cashBalance} corte={corte} todays={todays} onCompra={startCompra} />
-          : <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} readOnly={!isOwner} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />}
+          : (
+            <>
+              {activeModule === "saldos-compra" && (
+                <Dueno biz={biz} hoy={hoy} cashBalance={cashBalance} corte={corte} expenses={expenses} readOnly={!isOwner} onRecarga={() => setModal("recarga")} onFotos={(s) => { setFotosSel(s); setModal("fotos"); }} />
+              )}
+              {activeModule === "colaboradores" && (
+                <ColaboradoresModule bizId={biz.id} flash={flash} readOnly={!isOwner} onAdd={() => setModal("addCollaborator")} />
+              )}
+              {activeModule === "lista-compra" && <ModulePendiente title="Lista Compra" icon={<ClipboardList size={28} />} />}
+              {activeModule === "ventas-flujos" && <ModulePendiente title="Ventas y flujos" icon={<TrendingUp size={28} />} />}
+              {activeModule === "nomina" && <ModulePendiente title="Nómina" icon={<HandCoins size={28} />} />}
+              {activeModule === "dashboard" && <ModulePendiente title="Dashboard" icon={<LayoutDashboard size={28} />} />}
+            </>
+          )}
       </div>
+
+      {canViewDashboard
+        ? <BottomNav modules={DUENO_MODULES} active={activeModule} onSelect={setActiveModule} onCenter={startCompra} />
+        : <PendingBottomNav />}
 
       {/* modals */}
       {modal === "paymethod" && (
@@ -1202,7 +1244,7 @@ function AddCollaboratorForm({ onDone, onCancel }: { onDone: () => void | Promis
 }
 
 /* ---------- lista de colaboradores: restablecer contraseña y cambiar rol ---------- */
-function CollaboratorsList({ bizId, flash }: { bizId: string; flash: (msg: string) => void }) {
+function CollaboratorsList({ bizId, flash, readOnly }: { bizId: string; flash: (msg: string) => void; readOnly?: boolean }) {
   const sb = supabaseBrowser();
   const [list, setList] = useState<Profile[] | null>(null);
   const [loadErr, setLoadErr] = useState("");
@@ -1232,6 +1274,7 @@ function CollaboratorsList({ bizId, flash }: { bizId: string; flash: (msg: strin
           key={c.id}
           collaborator={c}
           flash={flash}
+          readOnly={readOnly}
           onRoleChanged={(newRole) => setList((l) => (l || []).map((x) => (x.id === c.id ? { ...x, role: newRole } : x)))}
         />
       ))}
@@ -1239,8 +1282,8 @@ function CollaboratorsList({ bizId, flash }: { bizId: string; flash: (msg: strin
   );
 }
 
-function CollaboratorRow({ collaborator, flash, onRoleChanged }: {
-  collaborator: Profile; flash: (msg: string) => void; onRoleChanged: (role: Role) => void;
+function CollaboratorRow({ collaborator, flash, readOnly, onRoleChanged }: {
+  collaborator: Profile; flash: (msg: string) => void; readOnly?: boolean; onRoleChanged: (role: Role) => void;
 }) {
   const sb = supabaseBrowser();
   const [changing, setChanging] = useState(false);
@@ -1262,15 +1305,19 @@ function CollaboratorRow({ collaborator, flash, onRoleChanged }: {
           <div style={{ fontWeight: 600 }}>{collaborator.name}</div>
           <div className="hint">@{collaborator.username || "—"}</div>
         </div>
-        <select
-          className="input" style={{ width: "auto" }}
-          value={collaborator.role} disabled={changing}
-          onChange={(e) => changeRole(e.target.value)}
-        >
-          {COLLAB_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-        </select>
+        {readOnly
+          ? <span className="badge badge-manual">{roleLabel(collaborator.role)}</span>
+          : (
+            <select
+              className="input" style={{ width: "auto" }}
+              value={collaborator.role} disabled={changing}
+              onChange={(e) => changeRole(e.target.value)}
+            >
+              {COLLAB_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+          )}
       </div>
-      {!resetOpen
+      {!readOnly && (!resetOpen
         ? <button className="btn btn-ghost btn-block" style={{ marginTop: 10 }} onClick={() => setResetOpen(true)}><KeyRound size={15} />Restablecer contraseña</button>
         : (
           <ResetPasswordInline
@@ -1278,7 +1325,7 @@ function CollaboratorRow({ collaborator, flash, onRoleChanged }: {
             onDone={() => { setResetOpen(false); flash("Contraseña actualizada"); }}
             onCancel={() => setResetOpen(false)}
           />
-        )}
+        ))}
     </div>
   );
 }
@@ -1341,6 +1388,7 @@ function ChefPlaceholder({ name, onLogout }: { name: string; onLogout: () => voi
         </div>
         <button className="btn btn-ghost btn-block" style={{ marginTop: 16 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
       </div>
+      <PendingBottomNav />
     </div>
   );
 }
@@ -1365,6 +1413,84 @@ function CajaPlaceholder({ name, onLogout }: { name: string; onLogout: () => voi
         </div>
         <button className="btn btn-ghost btn-block" style={{ marginTop: 16 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
       </div>
+      <PendingBottomNav />
+    </div>
+  );
+}
+
+/* ---------- barra de navegación de abajo ---------- */
+function BottomNav({ modules, active, onSelect, onCenter }: {
+  modules: ModuleDef[]; active: DuenoModuleKey; onSelect: (key: DuenoModuleKey) => void; onCenter: () => void;
+}) {
+  const left = modules.slice(0, 3);
+  const right = modules.slice(3, 6);
+  const Item = ({ m }: { m: ModuleDef }) => (
+    <button
+      className={`bottomnav-item ${active === m.key ? "active" : ""} ${!m.ready ? "pending" : ""}`}
+      onClick={() => onSelect(m.key)}
+    >
+      {m.icon}
+      <span>{m.navLabel}</span>
+    </button>
+  );
+  return (
+    <nav className="bottomnav">
+      <div className="bottomnav-inner">
+        {left.map((m) => <Item key={m.key} m={m} />)}
+        <button className="bottomnav-center" onClick={onCenter} title="Aplicar gasto">$</button>
+        {right.map((m) => <Item key={m.key} m={m} />)}
+      </div>
+    </nav>
+  );
+}
+
+/** Misma barra para Encargado/Chef/Caja, pero todo pendiente: no navega
+ *  a ningún lado todavía, solo avisa que ese módulo llega pronto. */
+function PendingBottomNav() {
+  const [note, setNote] = useState(false);
+  const tap = () => { setNote(true); setTimeout(() => setNote(false), 2200); };
+  return (
+    <>
+      <nav className="bottomnav">
+        <div className="bottomnav-inner">
+          {[0, 1, 2].map((i) => (
+            <button key={i} className="bottomnav-item pending" onClick={tap}><Clock size={19} /><span>Pronto</span></button>
+          ))}
+          <button className="bottomnav-center" onClick={tap} title="Próximamente">$</button>
+          {[0, 1, 2].map((i) => (
+            <button key={`r${i}`} className="bottomnav-item pending" onClick={tap}><Clock size={19} /><span>Pronto</span></button>
+          ))}
+        </div>
+      </nav>
+      {note && <div className="toast"><Clock size={16} />Este módulo llega pronto</div>}
+    </>
+  );
+}
+
+/* ---------- módulo: colaboradores (página completa, no sheet) ---------- */
+function ColaboradoresModule({ bizId, flash, readOnly, onAdd }: {
+  bizId: string; flash: (msg: string) => void; readOnly: boolean; onAdd: () => void;
+}) {
+  return (
+    <div>
+      <div className="section-title" style={{ marginTop: 18 }}><span>Colaboradores</span></div>
+      {!readOnly && (
+        <button className="btn btn-primary btn-block" style={{ marginBottom: 14 }} onClick={onAdd}>
+          <UserPlus size={16} />Agregar colaborador
+        </button>
+      )}
+      <CollaboratorsList bizId={bizId} flash={flash} readOnly={readOnly} />
+    </div>
+  );
+}
+
+/* ---------- módulo sin contenido todavía ---------- */
+function ModulePendiente({ title, icon }: { title: string; icon: React.ReactNode }) {
+  return (
+    <div className="card" style={{ marginTop: 18, padding: "40px 20px", textAlign: "center" }}>
+      <div style={{ opacity: 0.5, marginBottom: 10 }}>{icon}</div>
+      <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>{title}</div>
+      <div className="hint">Este módulo llega pronto.</div>
     </div>
   );
 }
