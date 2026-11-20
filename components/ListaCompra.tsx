@@ -30,6 +30,19 @@ function fechaLarga(iso: string) {
 function fechaCorta(iso: string) {
   return new Date(iso + "T00:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "long" });
 }
+function diaDe(iso: string) {
+  return new Date(iso).toLocaleDateString("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "long", year: "numeric" });
+}
+/** Agrupa por día (resuelto_at), conservando el orden en que llegaron (más reciente primero si el array ya viene así). */
+function agruparPorDia<T extends { resuelto_at: string | null }>(rows: T[]): [string, T[]][] {
+  const map = new Map<string, T[]>();
+  rows.forEach((r) => {
+    const key = diaDe(r.resuelto_at || new Date().toISOString());
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(r);
+  });
+  return Array.from(map.entries());
+}
 
 /* ---------- sheet/modal (copia local: evita un import circular con CuadraApp.tsx) ---------- */
 function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
@@ -65,6 +78,7 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [vista, setVista] = useState<"notif" | "live" | "captura" | null>(null);
+  const [verTodasNotif, setVerTodasNotif] = useState(false);
   const [showHistorial, setShowHistorial] = useState(false);
   const [lastSeen, setLastSeen] = useState(() => { try { return localStorage.getItem("lc_notif_seen") || ""; } catch { return ""; } });
 
@@ -189,6 +203,7 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
 
   function abrirNotificaciones() {
     setVista("notif");
+    setVerTodasNotif(false);
     const latest = notificaciones[0]?.resuelto_at;
     if (latest) { try { localStorage.setItem("lc_notif_seen", latest); } catch { /* modo privado: no pasa nada */ } setLastSeen(latest); }
   }
@@ -251,14 +266,25 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
             {notificaciones.length === 0 ? (
               <div className="empty"><div className="big">Sin novedades</div>Aquí verás los insumos que el dueño decidió no comprar, con el motivo.</div>
             ) : (
-              <div className="card">
-                {notificaciones.map((n) => (
-                  <div key={n.id} style={{ padding: "11px 16px", borderTop: "1px solid #EFF3EE" }}>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{n.insumo_nombre}</div>
-                    <div className="hint">No se compró el {fechaCorta(n.fecha)}{n.nota ? ` · "${n.nota}"` : ""}</div>
+              <>
+                <div className="owner-bar" style={{ marginTop: 0 }}>
+                  <div className="hint">{verTodasNotif ? "Todas, por fecha" : "Lo más reciente"}</div>
+                  <button className="linkbtn" onClick={() => setVerTodasNotif((v) => !v)}>{verTodasNotif ? "Solo lo último" : "Ver todas"}</button>
+                </div>
+                {(verTodasNotif ? agruparPorDia(notificaciones) : agruparPorDia(notificaciones).slice(0, 1)).map(([dia, ns]) => (
+                  <div key={dia}>
+                    <div className="day-head"><div className="day-name">{dia}</div></div>
+                    <div className="card" style={{ marginBottom: 14 }}>
+                      {ns.map((n) => (
+                        <div key={n.id} style={{ padding: "11px 16px", borderTop: "1px solid #EFF3EE" }}>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>{n.insumo_nombre}</div>
+                          <div className="hint">No se compró el {fechaCorta(n.fecha)}{n.nota ? ` · "${n.nota}"` : ""}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
-              </div>
+              </>
             )}
           </Sheet>
         )}
@@ -428,6 +454,7 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [editPrecio, setEditPrecio] = useState<{ insumoId: string; nombre: string; precio: number | null } | null>(null);
   const [showHistorial, setShowHistorial] = useState(false);
+  const [verTodasSolicitudes, setVerTodasSolicitudes] = useState(false);
 
   const load = useCallback(async () => {
     const hoy = todayISO();
@@ -486,7 +513,10 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
   }
 
   const pendientes = solicitudes.filter((s) => s.status === "pendiente");
-  const historial = solicitudes.filter((s) => s.status !== "pendiente");
+  const historial = solicitudes
+    .filter((s) => s.status !== "pendiente")
+    .sort((a, b) => (b.resuelto_at || "").localeCompare(a.resuelto_at || ""));
+  const historialPorDia = agruparPorDia(historial);
 
   return (
     <div>
@@ -563,22 +593,30 @@ export function ListaCompraModule({ bizId, profile, flash }: { bizId: string; pr
 
       {(isOwner || isRunner) && historial.length > 0 && (
         <>
-          <div className="section-title" style={{ marginTop: 18 }}><span>Historial de solicitudes</span></div>
-          <div className="card">
-            {historial.map((s) => (
-              <div key={s.id} style={{ padding: "10px 16px", borderTop: "1px solid #EFF3EE" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{s.insumo_nombre}</div>
-                  <span className={`badge ${s.status === "aprobada" ? "badge-ocr" : "badge-manual"}`}>{s.status === "aprobada" ? "Aprobada" : "Declinada"}</span>
-                </div>
-                <div className="hint">
-                  {s.tipo === "precio"
-                    ? `Precio propuesto ${money(s.precio_propuesto)}`
-                    : `Pidió quitarlo de la lista${s.monto != null ? ` · se ahorró ${money(s.monto)}` : ""}`}
-                </div>
-              </div>
-            ))}
+          <div className="section-title" style={{ marginTop: 18 }}>
+            <span>Historial de solicitudes</span>
+            <button className="linkbtn" onClick={() => setVerTodasSolicitudes((v) => !v)}>{verTodasSolicitudes ? "Solo lo último" : "Ver todas"}</button>
           </div>
+          {(verTodasSolicitudes ? historialPorDia : historialPorDia.slice(0, 1)).map(([dia, sols]) => (
+            <div key={dia}>
+              <div className="day-head"><div className="day-name">{dia}</div></div>
+              <div className="card" style={{ marginBottom: 14 }}>
+                {sols.map((s) => (
+                  <div key={s.id} style={{ padding: "10px 16px", borderTop: "1px solid #EFF3EE" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{s.insumo_nombre}</div>
+                      <span className={`badge ${s.status === "aprobada" ? "badge-ocr" : "badge-manual"}`}>{s.status === "aprobada" ? "Aprobada" : "Declinada"}</span>
+                    </div>
+                    <div className="hint">
+                      {s.tipo === "precio"
+                        ? `Precio propuesto ${money(s.precio_propuesto)}`
+                        : `Pidió quitarlo de la lista${s.monto != null ? ` · se ahorró ${money(s.monto)}` : ""}`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </>
       )}
 
