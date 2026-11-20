@@ -113,6 +113,31 @@ export interface ListaCompraItemRow {
   existencia: number;
   status: ListaCompraItemStatus;
   confirmado_por: string | null;
+  /** Cantidad real comprada por Rubén, si fue menor a `requerido` (reducción). null = compró lo pedido. */
+  comprado: number | null;
+  /** Motivo opcional de la reducción. */
+  nota_reduccion: string | null;
+}
+
+/** Fila que devuelve historial_chef(fecha): la lista de un día pasado, sin precio. */
+export interface HistorialChefRow {
+  insumo_id: string;
+  nombre: string;
+  categoria: string;
+  unidad: string;
+  requerido: number;
+  existencia: number;
+  comprado: number | null;
+  status: ListaCompraItemStatus;
+}
+
+/** Fila que devuelve notificaciones_chef(): insumos eliminados, sin dinero. */
+export interface NotificacionChefRow {
+  id: string;
+  insumo_nombre: string;
+  nota: string | null;
+  fecha: string;
+  resuelto_at: string;
 }
 
 export type SolicitudTipo = "precio" | "compra";
