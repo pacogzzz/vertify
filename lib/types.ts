@@ -88,6 +88,7 @@ export interface InsumoChef {
   categoria: string;
   nombre: string;
   unidad: string;
+  nivel_min: number | null;
   nivel_max: number | null;
 }
 

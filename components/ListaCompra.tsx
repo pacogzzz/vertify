@@ -175,14 +175,23 @@ export function ChefCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
   }
 
   function descargarCSV() {
-    const header = ["Categoría", "Insumo", "Unidad", "Requerido", "Existencia"];
+    // Catálogo completo, igual al inventario físico: todos los insumos con
+    // su mínimo/máximo, no solo los que se están pidiendo hoy (si el Chef
+    // ya puso algo, también sale su Requerido/Existencia de esta sesión).
+    const header = ["Categoría", "Insumo", "Unidad", "Mínimo", "Máximo", "Requerido", "Existencia"];
     const lines = [header.join(",")];
-    grupos.forEach(([, items]) => items.forEach((i) => {
-      const v = valores[i.id];
-      if (!v || (!v.requerido && !v.existencia)) return;
-      lines.push([i.categoria, i.nombre, i.unidad, v.requerido || "0", v.existencia || "0"].map(csvCell).join(","));
-    }));
-    if (lines.length === 1) { flash("Todavía no hay nada que descargar."); return; }
+    insumos
+      .slice()
+      .sort((a, b) => a.categoria.localeCompare(b.categoria) || a.nombre.localeCompare(b.nombre))
+      .forEach((i) => {
+        const v = valores[i.id];
+        lines.push([
+          i.categoria, i.nombre, i.unidad,
+          i.nivel_min ?? "", i.nivel_max ?? "",
+          v?.requerido || "", v?.existencia || "",
+        ].map(csvCell).join(","));
+      });
+    if (lines.length === 1) { flash("Todavía no hay insumos en el catálogo."); return; }
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = `lista-compra-${todayISO()}.csv`; a.click();
