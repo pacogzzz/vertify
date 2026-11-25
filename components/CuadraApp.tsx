@@ -5,7 +5,7 @@ import {
   Camera, Wallet, Plus, Download, Settings, Check, X,
   ChevronDown, ChevronRight, ChevronLeft, Receipt, Store, AlertTriangle,
   Loader2, Image as ImageIcon, Banknote, LogOut, UserPlus, CreditCard,
-  CalendarDays, PencilLine, ShieldCheck, Users, KeyRound, Clock,
+  CalendarDays, PencilLine, ShieldCheck, Users, KeyRound,
   ClipboardList, TrendingUp, HandCoins, LayoutDashboard,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -13,6 +13,7 @@ import { TIENDAS } from "@/lib/stores";
 import { COLLAB_ROLES, roleLabel } from "@/lib/roles";
 import { normalizeUsername, isValidUsername } from "@/lib/username";
 import { ChefCaptura, ListaCompraModule } from "./ListaCompra";
+import { CajaCaptura } from "./VentasFlujos";
 import type { Business, Profile, Role, ExpenseRow, FundingRow, ExpenseItem, ReceiptData } from "@/lib/types";
 
 /* ============================================================
@@ -243,11 +244,11 @@ type ModalKind = "paymethod" | "compra" | "recarga" | "settings" | "addCollabora
 
 /* ============================================================
    Barra de navegación de abajo: 3 módulos + círculo con el logo
-   (aplicar gasto) + 3 módulos más. Hoy solo Saldos Compra y
-   Colaboradores tienen contenido real; el resto es "próximamente"
-   hasta que trabajemos cada módulo. Solo la ve quien ve el panel
-   completo (Dueño/Administrador); los demás roles tienen la misma
-   barra pero con todo pendiente (ver PendingBottomNav).
+   (aplicar gasto) + 3 módulos más. Hoy Lista Compra, Saldos Compra
+   y Colaboradores tienen contenido real; el resto es "próximamente"
+   hasta que trabajemos cada módulo. La ven Dueño, Administrador y
+   Encargado — Chef y Caja tienen su propia pantalla completa
+   (ChefCaptura / CajaCaptura), sin esta barra.
    ============================================================ */
 type DuenoModuleKey = "lista-compra" | "saldos-compra" | "ventas-flujos" | "nomina" | "colaboradores" | "dashboard";
 
@@ -437,7 +438,7 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
      vista compartida) para poder trabajarlas por separado más adelante;
      hoy solo comparten el tipo de mensaje. */
   if (profile.role === "chef") return <ChefCaptura profile={profile} bizId={biz.id} onLogout={logout} />;
-  if (profile.role === "caja") return <CajaPlaceholder name={profile.name} onLogout={logout} />;
+  if (profile.role === "caja") return <CajaCaptura profile={profile} bizId={biz.id} onLogout={logout} />;
 
   return (
     <div className="cuadra">
@@ -1369,32 +1370,6 @@ function ResetPasswordInline({ profileId, onDone, onCancel }: {
   );
 }
 
-/* ---------- Caja: cuenta lista, interfaz propia pendiente ---------- */
-function CajaPlaceholder({ name, onLogout }: { name: string; onLogout: () => void }) {
-  return (
-    <div className="cuadra" style={{ minHeight: "100vh" }}>
-      <div className="wrap">
-        <header className="topbar">
-          <div className="brand">
-            <div className="brand-mark">$</div>
-            <div><div className="brand-name">Vertify</div><div className="brand-sub">Caja</div></div>
-          </div>
-          <div className="topbar-right">
-            <div className="rolechip"><Banknote size={15} />Caja</div>
-          </div>
-        </header>
-        <div className="card" style={{ marginTop: 40, padding: "32px 20px", textAlign: "center" }}>
-          <Clock size={30} style={{ opacity: 0.5, marginBottom: 10 }} />
-          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>Hola, {name}</div>
-          <div className="hint">Tu acceso como Caja ya está listo. Pronto vas a tener aquí tu propia pantalla.</div>
-        </div>
-        <button className="btn btn-ghost btn-block" style={{ marginTop: 16 }} onClick={onLogout}><LogOut size={16} />Cerrar sesión</button>
-      </div>
-      <PendingBottomNav />
-    </div>
-  );
-}
-
 /* ---------- barra de navegación de abajo ---------- */
 function BottomNav({ modules, active, onSelect, onCenter }: {
   modules: ModuleDef[]; active: DuenoModuleKey; onSelect: (key: DuenoModuleKey) => void; onCenter: () => void;
@@ -1421,28 +1396,6 @@ function BottomNav({ modules, active, onSelect, onCenter }: {
   );
 }
 
-/** Misma barra para Encargado/Chef/Caja, pero todo pendiente: no navega
- *  a ningún lado todavía, solo avisa que ese módulo llega pronto. */
-function PendingBottomNav() {
-  const [note, setNote] = useState(false);
-  const tap = () => { setNote(true); setTimeout(() => setNote(false), 2200); };
-  return (
-    <>
-      <nav className="bottomnav">
-        <div className="bottomnav-inner">
-          {[0, 1, 2].map((i) => (
-            <button key={i} className="bottomnav-item pending" onClick={tap}><Clock size={19} /><span>Pronto</span></button>
-          ))}
-          <button className="bottomnav-center" onClick={tap} title="Próximamente">$</button>
-          {[0, 1, 2].map((i) => (
-            <button key={`r${i}`} className="bottomnav-item pending" onClick={tap}><Clock size={19} /><span>Pronto</span></button>
-          ))}
-        </div>
-      </nav>
-      {note && <div className="toast"><Clock size={16} />Este módulo llega pronto</div>}
-    </>
-  );
-}
 
 /* ---------- módulo: colaboradores (página completa, no sheet) ---------- */
 function ColaboradoresModule({ bizId, flash, readOnly, onAdd }: {

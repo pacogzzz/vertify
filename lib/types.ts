@@ -162,3 +162,30 @@ export interface SolicitudRow {
   resuelto_at: string | null;
   created_at: string;
 }
+
+/* ---------- Ventas y flujos ---------- */
+
+/** Cierre de turno de Caja: una fila por día. Caja nunca la lee de vuelta. */
+export interface CorteCajaRow {
+  id: string;
+  business_id: string;
+  fecha: string; // YYYY-MM-DD
+  caja_id: string;
+  venta_efectivo: number;
+  venta_tarjeta: number;
+  foto_sobre_path: string;
+  foto_excel_path: string;
+  excel_venta_path: string;
+  created_at: string;
+}
+
+/** Gasto que Caja sacó directo de caja ese día (monto + concepto + foto). */
+export interface GastoCajaRow {
+  id: string;
+  business_id: string;
+  corte_id: string;
+  monto: number;
+  concepto: string;
+  foto_path: string;
+  created_at: string;
+}
