@@ -65,6 +65,14 @@ export interface ReceiptData {
   error?: string;
 }
 
+/** Respuesta del OCR de una foto de la app bancaria (Ventas y flujos Fase 2) */
+export interface BankPhotoData {
+  monto?: number;
+  concepto?: "efectivo" | "tarjeta";
+  descripcion?: string;
+  error?: string;
+}
+
 /* ---------- Lista Compra ---------- */
 
 /** Catálogo de insumos. El Chef nunca lee esto directo (trae precio); usa
@@ -187,5 +195,19 @@ export interface GastoCajaRow {
   monto: number;
   concepto: string;
   foto_path: string;
+  created_at: string;
+}
+
+/** Foto de la app bancaria que sube el Dueño, con el monto/concepto que
+ *  leyó el OCR y si coincide con lo que reportó Caja ese día. */
+export interface FotoBancoRow {
+  id: string;
+  business_id: string;
+  fecha: string; // YYYY-MM-DD
+  subido_por: string;
+  foto_path: string;
+  monto: number;
+  concepto: "efectivo" | "tarjeta";
+  coincide: boolean;
   created_at: string;
 }

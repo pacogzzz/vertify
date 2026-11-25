@@ -13,7 +13,7 @@ import { TIENDAS } from "@/lib/stores";
 import { COLLAB_ROLES, roleLabel } from "@/lib/roles";
 import { normalizeUsername, isValidUsername } from "@/lib/username";
 import { ChefCaptura, ListaCompraModule } from "./ListaCompra";
-import { CajaCaptura } from "./VentasFlujos";
+import { CajaCaptura, VentasFlujosModule } from "./VentasFlujos";
 import type { Business, Profile, Role, ExpenseRow, FundingRow, ExpenseItem, ReceiptData } from "@/lib/types";
 
 /* ============================================================
@@ -259,7 +259,7 @@ interface ModuleDef { key: DuenoModuleKey; label: string; navLabel: string; icon
 const DUENO_MODULES: ModuleDef[] = [
   { key: "lista-compra", label: "Lista Compra", navLabel: "Lista", icon: <ClipboardList size={19} />, ready: true },
   { key: "saldos-compra", label: "Saldos Compra", navLabel: "Saldos", icon: <Banknote size={19} />, ready: true },
-  { key: "ventas-flujos", label: "Ventas y flujos", navLabel: "Ventas", icon: <TrendingUp size={19} />, ready: false },
+  { key: "ventas-flujos", label: "Ventas y flujos", navLabel: "Ventas", icon: <TrendingUp size={19} />, ready: true },
   { key: "nomina", label: "Nómina", navLabel: "Nómina", icon: <HandCoins size={19} />, ready: false },
   { key: "colaboradores", label: "Colaboradores", navLabel: "Equipo", icon: <Users size={19} />, ready: true },
   { key: "dashboard", label: "Dashboard", navLabel: "Panel", icon: <LayoutDashboard size={19} />, ready: false },
@@ -488,7 +488,11 @@ export default function CuadraApp({ profile, business }: { profile: Profile; bus
             ? <ColaboradoresModule bizId={biz.id} flash={flash} readOnly={!isOwner} onAdd={() => setModal("addCollaborator")} />
             : <ModulePendiente title="Colaboradores" icon={<Users size={28} />} />
         )}
-        {activeModule === "ventas-flujos" && <ModulePendiente title="Ventas y flujos" icon={<TrendingUp size={28} />} />}
+        {activeModule === "ventas-flujos" && (
+          (isOwner || isAdmin)
+            ? <VentasFlujosModule profile={profile} bizId={biz.id} flash={flash} />
+            : <ModulePendiente title="Ventas y flujos" icon={<TrendingUp size={28} />} />
+        )}
         {activeModule === "nomina" && <ModulePendiente title="Nómina" icon={<HandCoins size={28} />} />}
         {activeModule === "dashboard" && <ModulePendiente title="Dashboard" icon={<LayoutDashboard size={28} />} />}
       </div>

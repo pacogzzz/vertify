@@ -5,16 +5,19 @@ import {
   Loader2, Check, X, AlertTriangle, Camera, FileSpreadsheet, Plus, Trash2, LogOut, Banknote, CreditCard,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import type { Profile } from "@/lib/types";
+import type { Profile, CorteCajaRow, FotoBancoRow } from "@/lib/types";
 
 /* ============================================================
-   Ventas y flujos — Fase 1: cierre de turno de Caja. Caja solo
-   alimenta el sistema (efectivo, tarjeta, gastos de caja, fotos
-   y el excel de venta); nunca lee dinero ni métricas. Vive aparte
+   Ventas y flujos — Fase 1: cierre de turno de Caja (alimenta el
+   sistema, nunca lee dinero ni métricas). Fase 2: el Dueño sube
+   fotos de la app bancaria, el OCR las lee solo, y se comparan
+   contra lo que reportó Caja (Administrador ve igual, sin poder
+   subir nada; Encargado de compra no tiene acceso). Vive aparte
    de CuadraApp.tsx por el mismo motivo que ListaCompra.tsx.
    ============================================================ */
 
 const num = (x: unknown) => { const n = typeof x === "number" ? x : parseFloat(String(x)); return isNaN(n) ? 0 : n; };
+const money = (n: unknown) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(num(n));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
 /* ---------- imagen: igual al prototipo (escala a JPEG antes de subir) ---------- */
@@ -273,6 +276,110 @@ export function CajaCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Módulo Ventas y flujos — Fase 2: validación con el banco.
+   Dueño sube, Administrador solo ve (sin controles de subida).
+   ============================================================ */
+export function VentasFlujosModule({ profile, bizId, flash }: { profile: Profile; bizId: string; flash: (msg: string) => void }) {
+  const sb = supabaseBrowser();
+  const isOwner = profile.role === "owner";
+
+  const [loaded, setLoaded] = useState(false);
+  const [corte, setCorte] = useState<CorteCajaRow | null>(null);
+  const [fotos, setFotos] = useState<FotoBancoRow[]>([]);
+  const [subiendo, setSubiendo] = useState(false);
+  const fotoRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(async () => {
+    const hoy = todayISO();
+    const [{ data: c }, { data: f }] = await Promise.all([
+      sb.from("cortes_caja").select("*").eq("fecha", hoy).maybeSingle(),
+      sb.from("fotos_banco").select("*").eq("fecha", hoy).order("created_at", { ascending: false }),
+    ]);
+    setCorte((c as CorteCajaRow) || null);
+    setFotos((f as FotoBancoRow[]) || []);
+    setLoaded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function onFotoBanco(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setSubiendo(true);
+    try {
+      const b64Full = await fileToScaled(file, 1400, 0.85);
+      const b64 = b64Full.split(",")[1] || b64Full;
+
+      const ocrRes = await fetch("/api/leer-foto-banco", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: b64 }),
+      });
+      const ocrData = await ocrRes.json().catch(() => ({}));
+      if (!ocrRes.ok) throw new Error(ocrData.error === "ilegible" ? "No se pudo leer la foto. Intenta con otra." : "No se pudo leer la foto.");
+      if (!ocrData.monto || !ocrData.concepto) throw new Error("No se pudo leer un monto o concepto válido en la foto.");
+
+      const hoy = todayISO();
+      const path = `${bizId}/${hoy.slice(0, 7)}/${hoy}_banco_${crypto.randomUUID()}.jpg`;
+      const { error: upErr } = await sb.storage.from("banco-photos").upload(path, b64ToBlob(b64Full), { contentType: "image/jpeg" });
+      if (upErr) throw new Error("No se pudo subir la foto. Revisa tu conexión.");
+
+      const saveRes = await fetch("/api/fotos-banco", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fecha: hoy, foto_path: path, monto: ocrData.monto, concepto: ocrData.concepto }),
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) throw new Error(saveData.error || "No se pudo guardar.");
+
+      setFotos((prev) => [saveData.row as FotoBancoRow, ...prev]);
+      flash(saveData.row.coincide ? "Coincide con lo que reportó Caja" : "No coincide con lo que reportó Caja");
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "No se pudo procesar la foto.");
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  if (!loaded) return <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Loader2 className="spin" size={22} /></div>;
+
+  return (
+    <div>
+      <div className="section-title" style={{ marginTop: 18 }}><span>Ventas y flujos</span><span className="muted">hoy</span></div>
+
+      <div className="sumgrid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <div className="sumcard"><div className="k">Caja reportó efectivo</div><div className="v">{corte ? money(corte.venta_efectivo) : "—"}</div></div>
+        <div className="sumcard"><div className="k">Caja reportó tarjeta</div><div className="v">{corte ? money(corte.venta_tarjeta) : "—"}</div></div>
+      </div>
+
+      {isOwner && (
+        <>
+          <input ref={fotoRef} type="file" accept="image/*" capture="environment" hidden onChange={onFotoBanco} />
+          <button className="btn btn-primary btn-block" style={{ marginTop: 14 }} onClick={() => fotoRef.current?.click()} disabled={subiendo}>
+            {subiendo ? <Loader2 className="spin" size={16} /> : <Camera size={16} />}Subir foto del banco
+          </button>
+        </>
+      )}
+
+      <div className="section-title" style={{ marginTop: 18 }}><span>Validación con el banco</span></div>
+      {!corte ? (
+        <div className="card"><div className="empty"><div className="big">Caja todavía no cierra turno hoy</div>En cuanto cierre turno vas a poder comparar las fotos del banco contra lo que reportó.</div></div>
+      ) : fotos.length === 0 ? (
+        <div className="card"><div className="empty"><div className="big">Todavía no hay fotos del banco hoy</div>{isOwner ? "Sube la primera arriba." : "El dueño todavía no sube ninguna."}</div></div>
+      ) : (
+        <div className="card">
+          {fotos.map((f) => (
+            <div key={f.id} style={{ padding: "12px 16px", borderTop: "1px solid #EFF3EE", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{money(f.monto)} <span className="hint" style={{ fontWeight: 500 }}>· {f.concepto === "efectivo" ? "Efectivo" : "Tarjeta"}</span></div>
+              {f.coincide ? <Check size={20} style={{ color: "var(--saldo)", flexShrink: 0 }} /> : <X size={20} style={{ color: "var(--danger)", flexShrink: 0 }} />}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
