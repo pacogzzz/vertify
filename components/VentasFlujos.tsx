@@ -186,7 +186,7 @@ export function CajaCaptura({ profile, bizId, onLogout }: { profile: Profile; bi
           </div>
         </header>
 
-        <input ref={fotoRef} type="file" accept="image/*" capture="environment" hidden onChange={onFotoFile} />
+        <input ref={fotoRef} type="file" accept="image/*" hidden onChange={onFotoFile} />
         <input ref={excelRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={onExcelFile} />
 
         {!loaded ? (
@@ -358,7 +358,7 @@ export function VentasFlujosModule({ profile, bizId, flash }: { profile: Profile
 
       {isOwner && (
         <>
-          <input ref={fotoRef} type="file" accept="image/*" capture="environment" hidden onChange={onFotoBanco} />
+          <input ref={fotoRef} type="file" accept="image/*" hidden onChange={onFotoBanco} />
           <button className="btn btn-primary btn-block" style={{ marginTop: 14 }} onClick={() => fotoRef.current?.click()} disabled={subiendo}>
             {subiendo ? <Loader2 className="spin" size={16} /> : <Camera size={16} />}Subir foto del banco
           </button>
