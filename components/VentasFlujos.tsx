@@ -317,9 +317,15 @@ export function VentasFlujosModule({ profile, bizId, flash }: { profile: Profile
       const b64Full = await fileToScaled(file, 1400, 0.85);
       const b64 = b64Full.split(",")[1] || b64Full;
 
-      const ocrRes = await fetch("/api/leer-foto-banco", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: b64 }),
-      });
+      let ocrRes: Response;
+      try {
+        ocrRes = await fetch("/api/leer-foto-banco", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: b64 }),
+          signal: AbortSignal.timeout(45000),
+        });
+      } catch {
+        throw new Error("El banco está tardando en leer la foto. Intenta de nuevo en un momento.");
+      }
       const ocrData = await ocrRes.json().catch(() => ({}));
       if (!ocrRes.ok) throw new Error(ocrData.error === "ilegible" ? "No se pudo leer la foto. Intenta con otra." : "No se pudo leer la foto.");
       if (!ocrData.monto || !ocrData.concepto) throw new Error("No se pudo leer un monto o concepto válido en la foto.");
@@ -362,6 +368,7 @@ export function VentasFlujosModule({ profile, bizId, flash }: { profile: Profile
           <button className="btn btn-primary btn-block" style={{ marginTop: 14 }} onClick={() => fotoRef.current?.click()} disabled={subiendo}>
             {subiendo ? <Loader2 className="spin" size={16} /> : <Camera size={16} />}Subir foto del banco
           </button>
+          {subiendo && <div className="hint" style={{ marginTop: 6, textAlign: "center" }}>Leyendo la foto, puede tardar hasta 45 segundos…</div>}
         </>
       )}
 
